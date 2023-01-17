@@ -1,0 +1,2 @@
+[workspace]
+members = ["common-defs", "xtask", "edgebit-agentd", "server-stub"]

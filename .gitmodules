@@ -1,0 +1,3 @@
+[submodule "edgebitapis"]
+	path = edgebitapis
+	url = git@github.com:edgebitio/edgebitapis.git

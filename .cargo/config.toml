@@ -1,0 +1,5 @@
+#[build]
+#rustflags = ["--target=x86_64-unknown-linux-musl"]
+
+[alias]
+xtask = "run --package xtask --"
