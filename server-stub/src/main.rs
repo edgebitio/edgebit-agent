@@ -63,7 +63,7 @@ impl InventoryService for Service {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "[::1]:7777".parse()?;
+    let addr = "0.0.0.0:7777".parse()?;
     let svc = Arc::new(Service::default());
 
     Server::builder()

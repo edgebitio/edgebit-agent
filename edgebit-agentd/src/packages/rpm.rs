@@ -57,14 +57,18 @@ fn query_installed_rpms() -> Result<HashMap<String, RpmPackage>> {
 }
 
 fn parse_rpm_info(line: &str) -> Option<RpmPackage> {
-    let fields: Vec<&str> = line.splitn(7, ' ').collect();
-    if fields.len() != 7 {
+    info!("{line}");
+
+    const FIELD_CNT: usize = 8;
+
+    let fields: Vec<&str> = line.splitn(FIELD_CNT, ' ').collect();
+    if fields.len() != FIELD_CNT {
         warn!("rpm returned trancated line: {line}");
         return None;
     }
 
     Some(RpmPackage{
-        id: fields[0].to_string(),
+        id: "rpm:".to_string() + fields[0],
         name: fields[1].to_string(),
         version: fields[2].to_string(),
         release: fields[3].to_string(),

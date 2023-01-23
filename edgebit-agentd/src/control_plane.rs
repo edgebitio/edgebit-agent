@@ -36,14 +36,14 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn connect(endpoint: Uri) -> Result<Self> {
+    pub async fn connect(endpoint: Uri, deploy_token: String) -> Result<Self> {
         let channel = Channel::builder(endpoint)
             .connect()
             .await?;
 
         let token = match load_token() {
             Ok(token) => token,
-            Err(_) => enroll(channel.clone()).await?,
+            Err(_) => enroll(channel.clone(), deploy_token).await?,
         };
 
         let auth_val: AsciiMetadataValue = format!("Bearer {token}").parse()?;
@@ -106,11 +106,11 @@ fn hostname() -> String {
         })
 }
 
-async fn enroll(channel: Channel) -> Result<String> {
+async fn enroll(channel: Channel, deploy_token: String) -> Result<String> {
     let mut enroll_svc = EnrollmentServiceClient::new(channel);
 
     let req = pb::EnrollAgentRequest{
-        deployment_token: "abc".to_string(),
+        deployment_token: deploy_token,
         hostname: hostname(),
     };
 

@@ -1,8 +1,8 @@
-use crate::open_monitor::OpenMonitor;
-
 pub mod packages;
 pub mod open_monitor;
 pub mod control_plane;
+
+use crate::open_monitor::{OpenMonitor};
 
 use anyhow::{Result, anyhow};
 
@@ -24,7 +24,13 @@ async fn run() -> Result<()> {
     let url = std::env::var("EDGEBIT_URL")
         .map_err(|_| anyhow!("Is EDGEBIT_URL env var set?"))?;
 
-    let mut client = control_plane::Client::connect(url.try_into()?).await?;
+    let token = std::env::var("EDGEBIT_ID")
+        .map_err(|_| anyhow!("Is EDGEBIT_ID env var set?"))?;
+
+    let mut client = control_plane::Client::connect(
+        url.try_into()?,
+        token.try_into()?,
+    ).await?;
 
     let mut pkg_registry = packages::Registry::new();
 
@@ -49,9 +55,15 @@ async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut pa
     // batch in 1s intervals
 
     while let Some(evt) = rx.recv().await {
-        let filenames = vec![evt.filename];
-        let pkgs = pkg_registry.get_packages(filenames);
-        _ = client.report_in_use(pkgs).await;
+        match evt.filename.into_string() {
+            Ok(filename) => {
+                let filenames = vec![filename];
+                let pkgs = pkg_registry.get_packages(filenames);
+                _ = client.report_in_use(pkgs).await;
+            },
+
+            Err(_) => (),
+        }
     }
 
     monitor_task.await.unwrap().unwrap();
