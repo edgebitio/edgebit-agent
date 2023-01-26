@@ -27,7 +27,7 @@ impl OpenMonitor {
         info!("Building inode cache");
         let inodes = InodeCache::load()?;
         info!("Done building inode cache");
-
+/*
         #[cfg(debug_assertions)]
         let mut bpf = Bpf::load(include_bytes_aligned!(
             "../../target/bpfel-unknown-none/debug/ebpf"
@@ -35,6 +35,11 @@ impl OpenMonitor {
         #[cfg(not(debug_assertions))]
         let mut bpf = Bpf::load(include_bytes_aligned!(
             "../../target/bpfel-unknown-none/release/ebpf"
+        ))?;
+*/
+
+        let mut bpf = Bpf::load(include_bytes_aligned!(
+            "../../ebpf/probes.bpf.o"
         ))?;
 
         for syscall in SYSCALLS {
@@ -57,7 +62,7 @@ impl OpenMonitor {
     }
 
     pub async fn run(self, ch: Sender<OpenEvent>) -> Result<()> {
-        let mut perf_array = AsyncPerfEventArray::try_from(self.bpf.map_mut("EVENTS")?)?;
+        let mut perf_array = AsyncPerfEventArray::try_from(self.bpf.map_mut("events")?)?;
         let inodes = Arc::new(self.inodes);
 
         let mut tasks = Vec::new();
@@ -72,6 +77,7 @@ impl OpenMonitor {
             // process each perf buffer in a separate task
             let tsk = tokio::task::spawn(async move {
                 monitor_on(perf_buf, inodes, ch).await;
+                info!("perf array task exiting");
             });
 
             tasks.push(tsk);
@@ -79,6 +85,7 @@ impl OpenMonitor {
 
         for tsk in tasks {
             _ = tsk.await;
+            info!("perf array task exited");
         }
 
         Ok(())
@@ -92,9 +99,11 @@ async fn monitor_on(mut perf_buf: AsyncPerfEventArrayBuffer<MapRefMut>, inodes: 
 
     loop {
         // wait for events
+        debug!("waiting for events");
         if let Ok(events) = perf_buf.read_events(&mut buffers).await {
             // events.read contains the number of events that have been read,
             // and is always <= buffers.len()
+            debug!("read {} events", events.read);
             for i in 0..events.read {
                 let buf = &mut buffers[i];
                 if let Ok(evt) = TryInto::<EvtOpen>::try_into(buf.as_ref()) {
@@ -111,6 +120,7 @@ async fn monitor_on(mut perf_buf: AsyncPerfEventArrayBuffer<MapRefMut>, inodes: 
                 }
             }
         } else {
+            info!("no events, breaking");
             break;
         }
     }

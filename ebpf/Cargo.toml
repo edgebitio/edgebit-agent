@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 aya-bpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
 #aya-log-ebpf = { git = "https://github.com/aya-rs/aya", tag = "aya-v0.11.0" }
+memoffset = "0.8"
 common-defs = { path = "../common-defs" }
 
 [[bin]]

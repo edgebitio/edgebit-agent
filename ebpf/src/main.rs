@@ -10,10 +10,12 @@ use aya_bpf::{
     macros::{tracepoint, map},
     programs::TracePointContext,
     maps::{PerfEventArray},
-    cty::{c_long},
+    cty::{c_long, c_void},
     helpers::*,
 };
 //use aya_log_ebpf::info;
+
+use memoffset::{offset_of, raw_field};
 
 use common_defs::*;
 
@@ -169,56 +171,65 @@ fn try_exit_open(ctx: &TracePointContext, ret: c_long) -> Result<u32, u32> {
 
     if let Some(entry) = unsafe { OPEN_INFLIGHT.get(&pid) } {
     */
-
+/*
     let mut evt = EvtOpen::new();
-    let f = unsafe { get_file(ret as u32)? };
+    let f = unsafe { get_file(ret as u32).or_else(|e| { bpf_printk!(b"get_file err"); Err(e) })? };
 
     //_ = unsafe { bpf_probe_read_user_str_bytes(entry.filename as *const u8, &mut evt.filename[..]) }
     //    .map_err(|_| 1u32)?;
 
-    let inode = get_inode(f)?;
-    let mode = get_mode(inode)?;
+    let inode = get_inode(f).or_else(|e| unsafe { bpf_printk!(b"get_inode err"); Err(e) })?;
+    let mode = get_mode(inode).or_else(|e| unsafe { bpf_printk!(b"get_mode err"); Err(e) })?;
     if (mode & S_IFREG) == 0 {
         // only report on regular files
+        unsafe { bpf_printk!(b"not a regular file"); }
         return Ok(0);
     }
-    let sb = get_sb(inode)?;
+    let sb = get_sb(inode).or_else(|e| unsafe { bpf_printk!(b"get_sb err"); Err(e) })?;
 
     evt.dev = unsafe { read_kernel(&((*sb).s_dev)) }? as u64;
     if get_major(evt.dev) == 0 {
         // special dev (proc, sys)
+        unsafe { bpf_printk!(b"special dev"); }
         return Ok(0);
     }
     evt.ino = unsafe { read_kernel(&((*inode).i_ino)) }?;
     evt.cgroup = unsafe { bpf_get_current_cgroup_id() } as u64;
 
+    unsafe { bpf_printk!(b"sending event"); }
     EVENTS.output(ctx, &evt, 0);
 
     //_ = OPEN_INFLIGHT.remove(&pid);
-
+*/
+    let offset = offset_of!(task_struct, files) as u32;
+    unsafe { bpf_printk!(b"offset = %u", offset); }
     Ok(0)
 }
 
 // Assumes that fd is valid
 unsafe fn get_file(fd: u32) -> Result<*const file, u32> {
     let current = unsafe { bpf_get_current_task() as *const task_struct };
-
-    let files = get_files(current)?;
-    let fdt = get_fdtable(files)?;
-    let fds = read_kernel(&((*fdt).fd))?;
-    let f = read_kernel(fds.add(fd as usize))?;
+    let files = get_files(current).map_err(|e| unsafe { bpf_printk!(b"get_files"); e })?;
+    let fdt = get_fdtable(files).map_err(|e| unsafe { bpf_printk!(b"get_fdtable"); e })?;
+    let fds = read_kernel(&((*fdt).fd)).map_err(|e| unsafe { bpf_printk!(b"fd[]"); e })?;
+    let f = read_kernel(fds.add(fd as usize)).map_err(|e| unsafe { bpf_printk!(b"fd[i]"); e })?;
 
     Ok(f)
 }
 
 #[inline(always)]
 fn get_files(task: *const task_struct) -> Result<*const files_struct, u32> {
-    let files = unsafe { read_kernel(&((*task).files)) }?;
+    let offset = offset_of!(task_struct, files) as u32;
+    unsafe { bpf_printk!(b"offset = %u", offset); }
+    let files = unsafe { read_kernel(raw_field!(task, task_struct, files)) }?;
     Ok(files as *const files_struct)
 }
 
 #[inline(always)]
 fn get_fdtable(files: *const files_struct) -> Result<*const fdtable, u32> {
+    unsafe { bpf_printk!(b"files: %lx", (files as *const c_void)); };
+    let fdt = unsafe { &((*files).fdt) as *const *mut fdtable as *const c_void };
+    unsafe { bpf_printk!(b"fdt: %lx", fdt); };
     let fdt = unsafe { read_kernel(&((*files).fdt)) }?;
     Ok(fdt as *const fdtable)
 }
