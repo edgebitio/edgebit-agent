@@ -1,2 +1,37 @@
-[workspace]
-members = ["common-defs", "xtask", "edgebit-agentd", "server-stub"]
+[package]
+name = "edgebit-agent"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4"
+pretty_env_logger = "0.4"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["std"] }
+#aya = { version = "0.11", features=["async_tokio"] }
+tokio = { version = "1.23", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "sync"] }
+bytes = "1.3"
+bytemuck = { version = "1.12", features = ["derive"] }
+prost = "0.11"
+tonic = { version = "0.8", features = ["transport", "tls"] }
+gethostname = "0.4"
+#libbpf-sys = { version = "1.1.1+v1.1.0", features = ["static"] }
+libbpf-rs = { version = "0.19.1", features = ["static"] }
+
+[build-dependencies]
+tonic-build = "0.8"
+libbpf-cargo = "0.13.1"
+
+[[bin]]
+name = "edgebit-agentd"
+path = "src/agentd/main.rs"
+
+[[bin]]
+name = "server-stub"
+path = "src/server-stub/main.rs"
+
+[package.metadata.libbpf]
+#prog_dir = "ebpf/src"  # default: <manifest_directory>/src/bpf

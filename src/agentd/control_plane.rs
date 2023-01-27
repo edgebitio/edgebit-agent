@@ -16,8 +16,8 @@ pub mod pb {
 use pb::enrollment_service_client::EnrollmentServiceClient;
 use pb::inventory_service_client::InventoryServiceClient;
 
-use crate::packages::PkgRef;
-use crate::packages::rpm::RpmPackage;
+use edgebit_agent::packages::PkgRef;
+use edgebit_agent::packages::rpm::RpmPackage;
 
 const TOKEN_FILE: &str = "/var/lib/edgebit/token";
 struct AuthInterceptor {

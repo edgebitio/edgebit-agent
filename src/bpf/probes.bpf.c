@@ -1,10 +1,11 @@
-#include <linux/errno.h>
+//#include <linux/errno.h>
 
 #include "vmlinux.h"
-#include "maps.h"
 #include <bpf/bpf_helpers.h>       /* most used helpers: SEC, __always_inline, etc */
 #include <bpf/bpf_core_read.h>     /* for BPF CO-RE helpers */
 #include <bpf/bpf_tracing.h>       /* for getting kprobe arguments */
+
+#include "maps.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -116,7 +117,7 @@ int tracepoint__syscalls__sys_enter_creat(struct trace_event_raw_sys_enter *tp) 
 }
 */
 
-SEC("tp/exit_creat")
+SEC("tp/syscalls/sys_exit_creat")
 int exit_creat(struct trace_event_raw_sys_exit *tp) {
     return do_exit_open(tp, tp->ret);
 }
@@ -131,7 +132,7 @@ int tracepoint__syscalls__sys_enter_open(struct trace_event_raw_sys_enter *tp) {
 }
 */
 
-SEC("tp/exit_open")
+SEC("tp/syscalls/sys_exit_open")
 int exit_open(struct trace_event_raw_sys_exit *tp) {
     return do_exit_open(tp, tp->ret);
 }
@@ -146,7 +147,7 @@ int tracepoint__syscalls__sys_enter_openat(struct trace_event_raw_sys_enter *tp)
 }
 */
 
-SEC("tp/exit_openat")
+SEC("tp/syscalls/sys_exit_openat")
 int exit_openat(struct trace_event_raw_sys_exit *tp) {
     return do_exit_open(tp, tp->ret);
 }
@@ -161,7 +162,7 @@ int tracepoint__syscalls__sys_enter_openat2(struct trace_event_raw_sys_enter *tp
 }
 */
 
-SEC("tp/exit_openat2")
+SEC("tp/syscalls/sys_exit_openat2")
 int exit_openat2(struct trace_event_raw_sys_exit *tp) {
     return do_exit_open(tp, tp->ret);
 }

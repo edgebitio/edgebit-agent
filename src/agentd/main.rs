@@ -1,12 +1,11 @@
-pub mod packages;
 pub mod open_monitor;
 pub mod control_plane;
-
-use crate::open_monitor::{OpenMonitor};
 
 use anyhow::{Result, anyhow};
 
 use open_monitor::OpenEvent;
+
+use edgebit_agent::packages::{Registry, rpm};
 
 #[tokio::main]
 async fn main() {
@@ -32,9 +31,9 @@ async fn run() -> Result<()> {
         token.try_into()?,
     ).await?;
 
-    let mut pkg_registry = packages::Registry::new();
+    let mut pkg_registry = Registry::new();
 
-    let rpms = packages::rpm::query_all()
+    let rpms = rpm::query_all()
         .unwrap_or(Vec::new());
     for r in &rpms {
         pkg_registry.add_pkg(&r.id, &r.files)
@@ -46,11 +45,9 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
-async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut packages::Registry) -> Result<()> {
-    let monitor = OpenMonitor::load()?;
-
+async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut Registry) -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
-    let monitor_task = tokio::task::spawn(monitor.run(tx));
+    let monitor_task = tokio::task::spawn_blocking(move || open_monitor::run(tx));
 
     // batch in 1s intervals
 

@@ -1,5 +1,3 @@
-#![no_std]
-
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
@@ -29,8 +27,7 @@ impl TryFrom<&[u8]> for EvtOpen {
             return Err(())
         }
 
-        let evt: &EvtOpen = bytemuck::from_bytes(&buf[..sz]);
-
-        Ok(*evt)
+        let evt: EvtOpen = bytemuck::pod_read_unaligned(&buf[..sz]);
+        Ok(evt)
     }
 }
