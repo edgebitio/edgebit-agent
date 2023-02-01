@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, Streaming};
 use tonic::transport::Server;
 
 pub mod pb {
@@ -33,22 +33,27 @@ impl EnrollmentService for Service {
 
 #[tonic::async_trait]
 impl InventoryService for Service {
-    async fn report_rpm(
+    async fn upload_sbom(
         &self,
-        request: Request<pb::ReportRpmRequest>,
+        request: Request<Streaming<pb::UploadSbomRequest>>,
     ) -> Result<Response<pb::Void>, Status> {
+        let mut request = request.into_inner();
+        let mut whole = Vec::new();
 
-        println!("report_rpm: {:?}", request);
-        Ok(Response::new(pb::Void{}))
-    }
-
-    async fn report_deb(
-        &self,
-        request: Request<pb::ReportDebRequest>,
-    ) -> Result<Response<pb::Void>, Status> {
-
-        println!("report_deb: {:?}", request);
-        Ok(Response::new(pb::Void{}))
+        loop {
+            match request.message().await {
+                Ok(Some(msg)) => {
+                    if let Some(pb::upload_sbom_request::Kind::Data(mut part)) = msg.kind {
+                        whole.append(&mut part);
+                    }
+                },
+                Ok(None) => {
+                    println!("upload_sbom: len={}", whole.len());
+                    return Ok(Response::new(pb::Void{}));
+                },
+                Err(e) => { return Err(e); },
+            }
+        }
     }
 
     async fn report_in_use(

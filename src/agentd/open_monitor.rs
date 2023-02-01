@@ -59,7 +59,7 @@ fn handle_event(buf: &[u8], inodes: &InodeCache, ch: &mut Sender<OpenEvent>) {
 }
 
 fn handle_lost_events(cpu: i32, count: u64) {
-    eprintln!("Lost {count} events on CPU {cpu}");
+    warn!("Lost {count} events on CPU {cpu}");
 }
 
 pub struct OpenEvent {
@@ -76,7 +76,7 @@ pub struct InodeCache {
 impl InodeCache {
     pub fn load() -> Result<Self> {
         let mut cache = HashMap::new();
-        traverse("/etc", &mut cache)?;
+        traverse("/", &mut cache)?;
         Ok(Self{
             inner: cache,
         })
@@ -105,7 +105,7 @@ fn traverse<P: AsRef<Path>>(path: P, cache: &mut HashMap<DevIno, OsString>) -> R
                         let dev = dev_libc_to_kernel(meta.st_dev());
                         let devino = (dev, meta.st_ino());
 
-                        debug!("{} @ {devino:?}", full_name.to_string_lossy());
+                        trace!("{} @ {devino:?}", full_name.to_string_lossy());
                         cache.insert(devino, full_name.into_os_string());
                     }
                 }

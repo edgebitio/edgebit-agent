@@ -1,15 +1,18 @@
 pub mod open_monitor;
 pub mod control_plane;
+pub mod sbom;
 
 use anyhow::{Result, anyhow};
+use log::*;
 
 use open_monitor::OpenEvent;
 
-use edgebit_agent::packages::{Registry, rpm};
+use edgebit_agent::packages::{Registry};
 
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
+
     match run().await {
         Ok(_) => {},
         Err(err) => {
@@ -26,21 +29,21 @@ async fn run() -> Result<()> {
     let token = std::env::var("EDGEBIT_ID")
         .map_err(|_| anyhow!("Is EDGEBIT_ID env var set?"))?;
 
+    info!("Generating SBOM");
+    let sbom_doc = sbom::generate()?;
+
+    info!("Connecting to Edgebit at {url}");
     let mut client = control_plane::Client::connect(
         url.try_into()?,
         token.try_into()?,
     ).await?;
 
-    let mut pkg_registry = Registry::new();
+    let mut pkg_registry = Registry::from_sbom(&sbom_doc);
 
-    let rpms = rpm::query_all()
-        .unwrap_or(Vec::new());
-    for r in &rpms {
-        pkg_registry.add_pkg(&r.id, &r.files)
-    }
+    info!("Uploading SBOM to Edgebit");
+    client.upload_sbom(json::stringify(sbom_doc)).await?;
 
-    client.report_rpms(rpms).await?;
-
+    info!("Starting to monitor packages in use");
     report_in_use(&mut client, &mut pkg_registry).await?;
     Ok(())
 }

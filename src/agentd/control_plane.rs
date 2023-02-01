@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use log::*;
+use futures::Stream;
+use futures::stream::StreamExt;
+use async_stream::stream;
 use tonic::{Request, Status};
 use tonic::codegen::InterceptedService;
 use tonic::service::Interceptor;
@@ -17,7 +20,6 @@ use pb::enrollment_service_client::EnrollmentServiceClient;
 use pb::inventory_service_client::InventoryServiceClient;
 
 use edgebit_agent::packages::PkgRef;
-use edgebit_agent::packages::rpm::RpmPackage;
 
 const TOKEN_FILE: &str = "/var/lib/edgebit/token";
 struct AuthInterceptor {
@@ -54,16 +56,24 @@ impl Client {
         Ok(Self{inner})
     }
 
-    pub async fn report_rpms(&mut self, rpms: Vec<RpmPackage>) -> Result<()> {
-        let rpms = rpms.into_iter()
-            .map(rpm_into_proto)
-            .collect();
-
-        let req = pb::ReportRpmRequest{
-            installed: rpms,
+    pub async fn upload_sbom(&mut self, sbom_doc: String) -> Result<()> {
+        // Header first
+        let header_req = pb::UploadSbomRequest{
+            kind: Some(pb::upload_sbom_request::Kind::Header(
+                pb::UploadSbomHeader{
+                    format: pb::SbomFormat::SbomfmtSyft as i32,
+                },
+            )),
         };
 
-        self.inner.report_rpm(req).await?;
+        let header_stream = futures::stream::once(
+            futures::future::ready(header_req)
+        );
+
+        let stream = header_stream.chain(data_stream(sbom_doc.into_bytes()));
+
+        self.inner.upload_sbom(stream).await?;
+
         Ok(())
     }
 
@@ -126,16 +136,12 @@ async fn enroll(channel: Channel, deploy_token: String) -> Result<String> {
     Ok(resp.agent_token)
 }
 
-fn rpm_into_proto(rpm: RpmPackage) -> pb::Rpm {
-    pb::Rpm {
-        id: rpm.id,
-        name: rpm.name,
-        version: rpm.version,
-        release: rpm.release,
-        epoch: rpm.epoch,
-        os: rpm.os,
-        arch: rpm.arch,
-        summary: rpm.summary,
-        files: rpm.files,
+fn data_stream(buf: Vec<u8>) -> impl Stream<Item=pb::UploadSbomRequest> {
+    stream!{
+        for chunk in buf.chunks(64*1024) {
+            yield pb::UploadSbomRequest{
+                kind: Some(pb::upload_sbom_request::Kind::Data(chunk.to_vec())),
+            };
+        }
     }
 }
