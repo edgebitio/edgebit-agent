@@ -1,4 +1,5 @@
 use std::process::{Command, Stdio};
+use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use json::JsonValue;
@@ -19,8 +20,18 @@ pub fn generate() -> Result<json::object::Object> {
     let json_buf = std::str::from_utf8(&output.stdout)?;
 
     info!("SBOM generated: {} bytes", json_buf.len());
+    parse(json_buf)
+}
 
-    match json::parse(json_buf)? {
+pub fn load<P: AsRef<Path>>(path: P) -> Result<json::object::Object> {
+    let path = path.as_ref();
+    let bytes = std::fs::read_to_string(path)?;
+
+    parse(&bytes)
+}
+
+fn parse(source: &str) -> Result<json::object::Object> {
+    match json::parse(source)? {
         JsonValue::Object(obj) => Ok(obj),
         _ => Err(anyhow!("syft output returned a non object JSON"))
     }

@@ -166,3 +166,27 @@ SEC("tp/syscalls/sys_exit_openat2")
 int exit_openat2(struct trace_event_raw_sys_exit *tp) {
     return do_exit_open(tp, tp->ret);
 }
+
+SEC("kprobe/setup_new_exec")
+int BPF_KPROBE(kprobe__setup_new_exec, struct linux_binprm *bprm) {
+    struct file *f = BPF_CORE_READ(bprm, file);
+    if (!f)
+        return 0;
+
+    struct inode *inode = BPF_CORE_READ(f, f_inode);
+
+    dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+    if (major(dev) == 0) {
+        // special dev (proc, sys)
+        return 0;
+    }
+
+    struct evt_open evt;
+    evt.dev = dev;
+    evt.ino = BPF_CORE_READ(inode, i_ino);
+    evt.cgroup = bpf_get_current_cgroup_id();
+
+    bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &evt, sizeof(evt));
+
+    return 0;
+}
