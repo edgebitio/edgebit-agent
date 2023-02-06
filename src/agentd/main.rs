@@ -1,14 +1,15 @@
 pub mod open_monitor;
 pub mod control_plane;
 pub mod sbom;
+pub mod registry;
 
 use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
 
 use open_monitor::OpenEvent;
-
-use edgebit_agent::packages::{Registry};
+use registry::Registry;
+use sbom::Sbom;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -40,14 +41,14 @@ async fn run(args: &CliArgs) -> Result<()> {
     let token = std::env::var("EDGEBIT_ID")
         .map_err(|_| anyhow!("Is EDGEBIT_ID env var set?"))?;
 
-    let sbom_doc = match &args.sbom {
+    let sbom = match &args.sbom {
         Some(sbom_path) => {
             info!("Loading SBOM");
-            sbom::load(sbom_path)?
+            Sbom::load(sbom_path)?
         },
         None => {
             info!("Generating SBOM");
-            sbom::generate()?
+            Sbom::generate()?
         },
     };
 
@@ -57,11 +58,11 @@ async fn run(args: &CliArgs) -> Result<()> {
         token.try_into()?,
     ).await?;
 
-    let mut pkg_registry = Registry::from_sbom(&sbom_doc);
+    let mut pkg_registry = Registry::from_sbom(&sbom)?;
 
     if !args.no_sbom_upload {
         info!("Uploading SBOM to Edgebit");
-        client.upload_sbom(json::stringify(sbom_doc)).await?;
+        client.upload_sbom(json::stringify(sbom.into_bytes())).await?;
     }
 
     info!("Starting to monitor packages in use");
