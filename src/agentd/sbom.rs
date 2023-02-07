@@ -10,8 +10,8 @@ pub struct Sbom {
 
 impl Sbom {
     pub fn generate() -> Result<Self> {
-        let syft_path = std::env::var("SYFT_PATH")?;
-        let output = Command::new(syft_path)
+        let syft = syft_path()?;
+        let output = Command::new(syft)
             .arg("/")
             .stdout(Stdio::piped())
             .spawn()?
@@ -121,8 +121,6 @@ impl <'a> Package<'a> {
             object_get(self.artifact, "metadata")?
         ).ok_or(anyhow!("'metadata' is not a string"))?;
 
-        let keys: Vec<_> = meta.iter().map(|(k, _)| k).collect();
-
         match meta.get("files") {
             Some(files) => {
                 let files = as_array(files)
@@ -204,4 +202,26 @@ fn as_array(val: &JsonValue) -> Option<&json::Array> {
 fn object_get<'a>(obj: &'a json::object::Object, key: &str) -> Result<&'a JsonValue> {
     obj.get(key)
         .ok_or(anyhow!("'{key}' is missing"))
+}
+
+fn syft_path() -> Result<PathBuf> {
+    if let Ok(syft) = std::env::var("SYFT_PATH") {
+        return Ok(PathBuf::from(syft));
+    }
+
+    let arg0: PathBuf = std::env::args()
+        .next()
+        .expect("program started without argv[0]")
+        .into();
+
+    let my_dir = arg0.parent()
+        .expect("argv[0] is empty");
+
+    let syft = my_dir.join("syft");
+
+    if syft.is_file() || syft.is_symlink() {
+        Ok(syft)
+    } else {
+        Err(anyhow!("'syft' not found. Set SYFT_PATH env var with /path/to/syft"))
+    }
 }
