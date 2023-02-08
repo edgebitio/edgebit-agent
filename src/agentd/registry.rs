@@ -18,25 +18,17 @@ impl Registry {
     pub fn from_sbom(sbom: &Sbom) -> Result<Self> {
         let mut inner: HashMap<String, Vec<String>> = HashMap::new();
 
-        for pkg in sbom.packages()? {
-            let id = match pkg.id() {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!("{e}");
-                    continue;
-                },
-            };
-
+        for pkg in sbom.artifacts() {
             match pkg.files() {
                 Ok(files) => {
                     for file in files {
                         inner.entry(file)
                             .or_default()
-                            .push(id.to_string());
+                            .push(pkg.id.to_string());
                     }
                 },
                 Err(e) => {
-                    warn!("'{id}': {e}");
+                    warn!("'{}': {e}", pkg.id);
                 }
             }
         }

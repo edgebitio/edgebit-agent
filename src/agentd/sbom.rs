@@ -1,100 +1,120 @@
-use std::process::{Command, Stdio};
+use std::process::{Command};
 use std::path::{Path, PathBuf};
+use std::io::BufReader;
 
 use anyhow::{Result, anyhow};
-use json::JsonValue;
 use log::*;
+use serde::Deserialize;
+use temp_file::TempFile;
+
+pub fn generate() -> Result<TempFile> {
+    let syft = syft_path()?;
+    let tmp = TempFile::new()?;
+
+    let child = Command::new(syft)
+        .arg("--file")
+        .arg(tmp.path())
+        .arg("/")
+        .spawn()?;
+
+    let out = child.wait_with_output()?;
+
+    if !out.status.success() {
+        return Err(anyhow!("syft failed"));
+    }
+
+    info!("SBOM generated");
+    Ok(tmp)
+}
+
 pub struct Sbom {
-    doc: json::object::Object,
+    doc: SbomDoc,
 }
 
 impl Sbom {
-    pub fn generate() -> Result<Self> {
-        let syft = syft_path()?;
-        let output = Command::new(syft)
-            .arg("/")
-            .stdout(Stdio::piped())
-            .spawn()?
-            .wait_with_output()?;
-
-        if !output.status.success() {
-            return Err(anyhow!("syft failed"));
-        }
-
-        let json_buf = std::str::from_utf8(&output.stdout)?;
-
-        info!("SBOM generated: {} bytes", json_buf.len());
-        Ok(Sbom{
-            doc: parse(json_buf)?,
-        })
-    }
-
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
-        let bytes = std::fs::read_to_string(path)?;
+        let file = std::fs::File::open(path.as_ref())?;
+        let reader = BufReader::new(file);
 
-        Ok(Sbom{
-            doc: parse(&bytes)?,
+        Ok(Self{
+            doc: serde_json::from_reader(reader)?,
         })
     }
 
-    pub fn packages<'a>(&'a self) -> Result<impl Iterator<Item=Package<'a>>> {
-        let artifacts = self.doc.get("artifacts")
-            .ok_or(anyhow!("'artifacts' missing"))?;
+    pub fn artifacts(&self) -> &Vec<Artifact> {
+        &self.doc.artifacts
+    }
+}
 
-        let artifacts = as_array(artifacts)
-            .ok_or(anyhow!("'artifacts' is not an array"))?;
+#[derive(Deserialize)]
+struct SbomDoc {
+    artifacts: Vec<Artifact>,
+}
 
-        let iter = artifacts.iter()
-            .filter_map(|a| {
-                match parse_artifact(a) {
-                    Ok(pkg) => { pkg.trace(); Some(pkg) },
-                    Err(e) => { warn!("{e}"); None },
+#[derive(Deserialize)]
+pub struct Artifact {
+    pub id: String,
+
+    #[serde(rename(deserialize = "type"))]
+    type_: String,
+
+    #[serde(rename(deserialize = "metadataType"))]
+    metadata_type: Option<String>,
+
+    metadata: Option<Metadata>,
+}
+
+impl Artifact {
+    pub fn files(&self) -> Result<Vec<String>> {
+        // This mapping might not be so one-to-one
+        let (type_, expect_meta_type) = match self.type_.as_ref() {
+            "deb" => (PackageType::Deb, "DpkgMetadata"),
+            "rpm" => (PackageType::Rpm, "RpmMetadata"),
+            "python" => (PackageType::Python, "PythonPackageMetadata"),
+            _ => return Err(anyhow!("'{}' is an unsupported artifact type", self.type_)),
+        };
+
+        let paths = match (&self.metadata, &self.metadata_type) {
+            (None, _) => Vec::new(),
+            (Some(metadata), Some(metadata_type)) => {
+                if metadata_type != expect_meta_type {
+                    return Err(anyhow!("'metadataType' has unexpected value {metadata_type}, expected {expect_meta_type}"));
                 }
-            });
 
-        Ok(iter)
-    }
+                metadata.file_paths(type_)?
+            },
+            (Some(_), None) => return Err(anyhow!("'metadataType' is missing")),
+        };
 
-    pub fn into_bytes(self) -> Vec<u8> {
-        json::stringify(JsonValue::Object(self.doc)).into_bytes()
-    }
-}
-
-fn parse(source: &str) -> Result<json::object::Object> {
-    match json::parse(source)? {
-        JsonValue::Object(obj) => Ok(obj),
-        _ => Err(anyhow!("syft output returned a non object JSON"))
+        Ok(paths)
     }
 }
 
-fn parse_artifact(artifact: &JsonValue) -> Result<Package> {
-    let artifact = as_object(artifact)
-        .ok_or(anyhow!("'artifact' is not an object"))?;
+#[derive(Deserialize)]
+struct Metadata {
+    files: Option<Vec<File>>,
 
-    let type_ = object_get(artifact, "type")?
-        .as_str()
-        .ok_or(anyhow!("'type' is not a string"))?;
+    #[serde(rename(deserialize = "sitePackagesRootPath"))]
+    site_packages_root_path: Option<String>,
+}
 
-    let meta_type = artifact.get("metadataType")
-        .ok_or(anyhow!("'metadataType' missing"))?;
-
-    // This mapping might not be so one-to-one
-    let (type_, expect_meta_type) = match type_ {
-        "deb" => (PackageType::Deb, "DpkgMetadata"),
-        "rpm" => (PackageType::Rpm, "RpmMetadata"),
-        "python" => (PackageType::Python, "PythonPackageMetadata"),
-        _ => return Err(anyhow!("'{type_}' is an unsupported artifact type")),
-    };
-
-    if meta_type != expect_meta_type {
-        return Err(anyhow!("'metadataType' has unexpected value {meta_type}, expected {expect_meta_type}"));
+impl Metadata {
+    fn file_paths(&self, pkg_type: PackageType) -> Result<Vec<String>> {
+        match self.files {
+            Some(ref files) => {
+                match pkg_type {
+                    PackageType::Rpm | PackageType::Deb => generic_files(files),
+                    PackageType::Python => python_files(files, self),
+                }
+            }
+            None => Ok(Vec::new()),
+        }
     }
+}
 
-    Ok(Package {
-        type_,
-        artifact,
-    })
+#[derive(Deserialize)]
+struct File {
+    path: Option<String>,
 }
 
 pub enum PackageType {
@@ -103,44 +123,7 @@ pub enum PackageType {
     Python,
 }
 
-pub struct Package<'a> {
-    type_: PackageType,
-    artifact: &'a json::object::Object,
-}
-
-impl <'a> Package<'a> {
-    pub fn id(&self) -> Result<&str> {
-        Ok(self.artifact.get("id")
-            .ok_or(anyhow!("'id' missing"))?
-            .as_str()
-            .ok_or(anyhow!("'id' is not a string"))?)
-    }
-
-    pub fn files(&self) -> Result<Vec<String>> {
-        let meta = as_object(
-            object_get(self.artifact, "metadata")?
-        ).ok_or(anyhow!("'metadata' is not a string"))?;
-
-        match meta.get("files") {
-            Some(files) => {
-                let files = as_array(files)
-                    .ok_or(anyhow!("'files' is not an array"))?;
-
-                match self.type_ {
-                    PackageType::Rpm | PackageType::Deb => generic_files(files),
-                    PackageType::Python => python_files(files, meta),
-                }
-            },
-            None => Ok(Vec::new())
-        }
-    }
-
-    fn trace(&self) {
-        trace!("{:?}: {:?}", self.id(), self.files());
-    }
-}
-
-fn generic_files(files_arr: &json::Array) -> Result<Vec<String>> {
+fn generic_files(files_arr: &[File]) -> Result<Vec<String>> {
     let paths = files_arr.iter()
         .filter_map(extract_path)
         .map(normalize)
@@ -149,11 +132,9 @@ fn generic_files(files_arr: &json::Array) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-fn python_files(files_arr: &json::Array, meta: &json::object::Object) -> Result<Vec<String>> {
-    let root_path = meta.get("sitePackagesRootPath")
-        .ok_or(anyhow!("'sitePackagesRootPath' is missing"))?
-        .as_str()
-        .ok_or(anyhow!("'sitePackagesRootPath' is not a string"))?;
+fn python_files(files_arr: &[File], meta: &Metadata) -> Result<Vec<String>> {
+    let root_path = meta.site_packages_root_path.as_ref()
+        .ok_or(anyhow!("'sitePackagesRootPath' is missing"))?;
 
     let root_path = PathBuf::from(root_path);
 
@@ -166,13 +147,8 @@ fn python_files(files_arr: &json::Array, meta: &json::object::Object) -> Result<
     Ok(paths)
 }
 
-fn extract_path(f: &JsonValue) -> Option<PathBuf> {
-    use std::str::FromStr;
-
-    PathBuf::from_str(as_object(f)?
-        .get("path")?
-        .as_str()?)
-        .ok()
+fn extract_path(f: &File) -> Option<PathBuf> {
+    Some(f.path.as_ref()?.into())
 }
 
 fn normalize(path: PathBuf) -> String {
@@ -183,25 +159,6 @@ fn normalize(path: PathBuf) -> String {
 
     path.to_string_lossy()
         .into_owned()
-}
-
-fn as_object(val: &JsonValue) -> Option<&json::object::Object> {
-    match val {
-        JsonValue::Object(o) => Some(o),
-        _ => None,
-    }
-}
-
-fn as_array(val: &JsonValue) -> Option<&json::Array> {
-    match val {
-        JsonValue::Array(a) => Some(a),
-        _ => None,
-    }
-}
-
-fn object_get<'a>(obj: &'a json::object::Object, key: &str) -> Result<&'a JsonValue> {
-    obj.get(key)
-        .ok_or(anyhow!("'{key}' is missing"))
 }
 
 fn syft_path() -> Result<PathBuf> {

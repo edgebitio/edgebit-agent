@@ -31,7 +31,7 @@ fn monitor(inodes: &InodeCache, mut ch: Sender<OpenEvent>) -> Result<()> {
     skel.attach()?;
 
     let cb = Box::new(|_cpu, buf: &[u8]| {
-            handle_event(buf, inodes, &mut ch);
+        handle_event(buf, inodes, &mut ch);
     });
     let perf = PerfBufferBuilder::new(skel.maps_mut().events())
         .sample_cb(cb)
@@ -74,6 +74,12 @@ pub struct InodeCache {
 }
 
 impl InodeCache {
+    pub fn new() -> Self {
+        Self{
+            inner: HashMap::new(),
+        }
+    }
+
     pub fn load() -> Result<Self> {
         let mut cache = HashMap::new();
         traverse("/", &mut cache)?;

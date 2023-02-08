@@ -3,6 +3,8 @@ pub mod control_plane;
 pub mod sbom;
 pub mod registry;
 
+use std::path::Path;
+
 use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
@@ -41,29 +43,38 @@ async fn run(args: &CliArgs) -> Result<()> {
     let token = std::env::var("EDGEBIT_ID")
         .map_err(|_| anyhow!("Is EDGEBIT_ID env var set?"))?;
 
-    let sbom = match &args.sbom {
-        Some(sbom_path) => {
-            info!("Loading SBOM");
-            Sbom::load(sbom_path)?
-        },
-        None => {
-            info!("Generating SBOM");
-            Sbom::generate()?
-        },
-    };
-
     info!("Connecting to Edgebit at {url}");
     let mut client = control_plane::Client::connect(
         url.try_into()?,
         token.try_into()?,
     ).await?;
 
-    let mut pkg_registry = Registry::from_sbom(&sbom)?;
+    let sbom = match &args.sbom {
+        Some(sbom_path) => {
+            info!("Loading SBOM");
+            let sbom_path: &Path = sbom_path.as_ref();
+            let sbom = Sbom::load(sbom_path)?;
 
-    if !args.no_sbom_upload {
-        info!("Uploading SBOM to Edgebit");
-        client.upload_sbom(json::stringify(sbom.into_bytes())).await?;
-    }
+            if !args.no_sbom_upload {
+                upload_sbom(&mut client, sbom_path).await?;
+            }
+
+            sbom
+        },
+        None => {
+            info!("Generating SBOM");
+            let tmp_file = sbom::generate()?;
+            let sbom = Sbom::load(tmp_file.path())?;
+
+            if !args.no_sbom_upload {
+                upload_sbom(&mut client, tmp_file.path()).await?;
+            }
+
+            sbom
+        },
+    };
+
+    let mut pkg_registry = Registry::from_sbom(&sbom)?;
 
     info!("Starting to monitor packages in use");
     report_in_use(&mut client, &mut pkg_registry).await?;
@@ -90,5 +101,12 @@ async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut Re
 
     monitor_task.await.unwrap().unwrap();
 
+    Ok(())
+}
+
+async fn upload_sbom(client: &mut control_plane::Client, path: &Path) -> Result<()> {
+    info!("Uploading SBOM to Edgebit");
+    let f = std::fs::File::open(path)?;
+    client.upload_sbom(f).await?;
     Ok(())
 }

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
+use std::io::Read;
+use std::sync::{Mutex, Arc};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use log::*;
 use futures::Stream;
 use futures::stream::StreamExt;
@@ -56,7 +58,7 @@ impl Client {
         Ok(Self{inner})
     }
 
-    pub async fn upload_sbom(&mut self, sbom_doc: String) -> Result<()> {
+    pub async fn upload_sbom(&mut self, sbom_reader: std::fs::File) -> Result<()> {
         // Header first
         let header_req = pb::UploadSbomRequest{
             kind: Some(pb::upload_sbom_request::Kind::Header(
@@ -70,11 +72,16 @@ impl Client {
             futures::future::ready(header_req)
         );
 
-        let stream = header_stream.chain(data_stream(sbom_doc.into_bytes()));
+        // TODO: There must be a simpler way to deal with a stream causing an error
+        let result = Arc::new(Mutex::new(Result::Ok(())));
+        let stream = header_stream.chain(data_stream(sbom_reader, result.clone()));
 
         self.inner.upload_sbom(stream).await?;
 
-        Ok(())
+        std::sync::Arc::<std::sync::Mutex<Result<(), anyhow::Error>>>::try_unwrap(result)
+            .unwrap()
+            .into_inner()
+            .unwrap()
     }
 
     pub async fn report_in_use(&mut self, pkgs: Vec<PkgRef>) -> Result<()> {
@@ -94,7 +101,6 @@ impl Client {
         self.inner.report_in_use(req).await?;
         Ok(())
     }
-
 }
 
 fn load_token() -> Result<String> {
@@ -136,12 +142,28 @@ async fn enroll(channel: Channel, deploy_token: String) -> Result<String> {
     Ok(resp.agent_token)
 }
 
-fn data_stream(buf: Vec<u8>) -> impl Stream<Item=pb::UploadSbomRequest> {
+fn data_stream<'a, R: Read + Send + 'a>(mut rd: R, result: Arc<Mutex<Result<()>>>) -> impl Stream<Item=pb::UploadSbomRequest> + Send {
     stream!{
-        for chunk in buf.chunks(64*1024) {
-            yield pb::UploadSbomRequest{
-                kind: Some(pb::upload_sbom_request::Kind::Data(chunk.to_vec())),
-            };
+        let mut buf = vec![0u8; 64*1024];
+        loop {
+            match rd.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    yield pb::UploadSbomRequest{
+                        kind: Some(pb::upload_sbom_request::Kind::Data(buf[0..n].to_vec())),
+                    };
+                },
+                Err(e) => {
+                    match e.kind() {
+                        std::io::ErrorKind::Interrupted => continue,
+                        kind => {
+                            use std::ops::DerefMut;
+                            *(result.lock().unwrap().deref_mut()) = Err(anyhow!("io error: {kind}"));
+                            break;
+                        },
+                    }
+                }
+            }
         }
     }
 }
