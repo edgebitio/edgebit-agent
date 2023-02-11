@@ -50,7 +50,7 @@ fn handle_event(buf: &[u8], inodes: &InodeCache, ch: &mut Sender<OpenEvent>) {
                 cgroup: evt.cgroup,
                 filename: filename.clone(),
             };
-            info!("match: {filename:?}, {}/{}", evt.dev, evt.ino);
+            debug!("match: {filename:?}, {}/{}", evt.dev, evt.ino);
             _ = ch.blocking_send(open);
         } else {
             warn!("filename not found for dev={:x}, ino={}", evt.dev, evt.ino);

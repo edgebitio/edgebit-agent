@@ -56,19 +56,14 @@ impl Registry {
         let mut result: HashMap<String, PkgRef> = HashMap::new();
 
         for f in filenames {
-            match self.inner.get(&f) {
-                Some(pkg_ids) => {
-                    for id in pkg_ids {
-                        match result.get_mut(id) {
-                            Some(pkg) => pkg.filenames.push(f.to_string()),
-                            None => {
-                                result.insert(id.clone(), PkgRef::new(id.clone(), f.to_string()));
-                            }
+            if let Some(pkg_ids) = self.inner.get(&f) {
+                for id in pkg_ids {
+                    match result.get_mut(id) {
+                        Some(pkg) => pkg.filenames.push(f.to_string()),
+                        None => {
+                            result.insert(id.clone(), PkgRef::new(id.clone(), f.to_string()));
                         }
                     }
-                },
-                None => {
-                    result.insert(String::new(), PkgRef::new(String::new(), f.to_string()));
                 }
             }
         }

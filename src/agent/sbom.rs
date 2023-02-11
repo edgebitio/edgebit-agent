@@ -11,10 +11,22 @@ pub fn generate() -> Result<TempFile> {
     let syft = syft_path()?;
     let tmp = TempFile::new()?;
 
-    let child = Command::new(syft)
-        .arg("--file")
-        .arg(tmp.path())
-        .arg("/")
+    let config = std::env::var("SYFT_CONFIG_FILE")
+        .ok();
+
+    let out_path = tmp.path();
+
+    let mut child = Command::new(syft);
+
+    child.arg("--file")
+        .arg(out_path);
+
+    if let Some(config) = config {
+        child.arg("--config")
+            .arg(config);
+    }
+
+    let child = child.arg("/")
         .spawn()?;
 
     let out = child.wait_with_output()?;

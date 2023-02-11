@@ -26,6 +26,7 @@ systemd_install() {
 	echo "EDGEBIT_ID=${EDGEBIT_ID}" > /etc/edgebit/config.env
 	echo "EDGEBIT_URL=${EDGEBIT_URL}" >> /etc/edgebit/config.env
 	echo "RUST_LOG=info" >> /etc/edgebit/config.env
+	echo "SYFT_CONFIG_FILE=${PREFIX}/edgebit/data/.syft.yaml" >> /etc/edgebit/config.env
 
 	echo "Reloading systemd"
 	systemctl daemon-reload
