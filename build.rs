@@ -1,11 +1,23 @@
 use libbpf_cargo::SkeletonBuilder;
 use std::{env, path::PathBuf};
 
-const SRC: &str = "src/bpf/probes.bpf.c";
+const PROBES_SRC: &str = "src/bpf/probes.bpf.c";
+
+const PROTOS: &[&str] = &[
+    "edgebitapis/edgebit/agent/v1alpha/token_service.proto",
+    "edgebitapis/edgebit/agent/v1alpha/inventory_service.proto",
+];
 
 fn build_protos() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("edgebitapis/edgebit/v1alpha/enrollment_service.proto")?;
-    tonic_build::compile_protos("edgebitapis/edgebit/v1alpha/inventory_service.proto")?;
+    let includes: &[&str] = &[];
+
+    tonic_build::configure()
+        .compile(PROTOS, includes)?;
+
+    for proto in PROTOS {
+        println!("cargo:rerun-if-changed={proto}");
+    }
+
     Ok(())
 }
 
@@ -14,11 +26,11 @@ fn build_bpf() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set in build script"));
     out.push("probes.skel.rs");
     SkeletonBuilder::new()
-        .source(SRC)
+        .source(PROBES_SRC)
         .clang("clang-10")
         .clang_args("-D__TARGET_ARCH_x86")
         .build_and_generate(&out)?;
-    println!("cargo:rerun-if-changed={}", SRC);
+    println!("cargo:rerun-if-changed={PROBES_SRC}");
     Ok(())
 }
 

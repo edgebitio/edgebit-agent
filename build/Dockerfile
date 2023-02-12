@@ -11,7 +11,7 @@ RUN VERS=0.188 && \
 
 RUN sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/x86_64-linux-musl/asm
 
-RUN sudo apt update && sudo apt -y install clang-10 libelf1 protobuf-compiler
+RUN sudo apt update && sudo apt -y install clang-10 libelf1 protobuf-compiler libprotobuf-dev
 
 RUN sudo ln -s /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/libz.so
 RUN sudo ln -s /usr/lib/x86_64-linux-gnu/libelf.so.1 /usr/lib/x86_64-linux-gnu/libelf.so

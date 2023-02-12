@@ -261,6 +261,7 @@ dependencies = [
  "log",
  "pretty_env_logger",
  "prost",
+ "prost-types",
  "serde",
  "serde_json",
  "temp-file",

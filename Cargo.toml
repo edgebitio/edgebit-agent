@@ -17,6 +17,7 @@ tokio = { version = "1.23", features = ["macros", "rt", "rt-multi-thread", "net"
 bytes = "1.3"
 bytemuck = { version = "1.12", features = ["derive"] }
 prost = "0.11"
+prost-types = "0.11"
 tonic = { version = "0.8", features = ["transport", "tls", "tls-webpki-roots"] }
 gethostname = "0.4"
 libbpf-rs = { version = "0.19.1", features = ["static"] }

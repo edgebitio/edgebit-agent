@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::io::Read;
 use std::sync::{Mutex, Arc};
+use std::time::{SystemTime, Duration};
 
 use anyhow::{Result, anyhow};
 use log::*;
@@ -12,31 +13,35 @@ use tonic::codegen::InterceptedService;
 use tonic::service::Interceptor;
 use tonic::transport::{Channel, Uri};
 use tonic::metadata::AsciiMetadataValue;
+use tokio::task::JoinHandle;
 
 pub mod pb {
-    tonic::include_proto!("edgebit.v1alpha.enrollment");
-    tonic::include_proto!("edgebit.v1alpha.inventory");
+    tonic::include_proto!("edgebit.agent.v1alpha");
 }
 
-use pb::enrollment_service_client::EnrollmentServiceClient;
+use pb::token_service_client::TokenServiceClient;
 use pb::inventory_service_client::InventoryServiceClient;
 
 use crate::registry::PkgRef;
 
 const TOKEN_FILE: &str = "/var/lib/edgebit/token";
+const EXPIRATION_SLACK: Duration = Duration::from_secs(60);
+const DEFAULT_EXPIRATION: Duration = Duration::from_secs(60*60);
+
 struct AuthInterceptor {
-    auth_val: AsciiMetadataValue,
+    token: AuthToken,
 }
 
 impl Interceptor for AuthInterceptor {
     fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {
-        request.metadata_mut().insert("authorization", self.auth_val.clone());
+        request.metadata_mut().insert("authorization", self.token.get());
         Ok(request)
     }
 }
 
 pub struct Client {
-    inner: InventoryServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    inventory_svc: InventoryServiceClient<InterceptedService<Channel, AuthInterceptor>>,
+    sess_keeper_task: JoinHandle<()>,
 }
 
 impl Client {
@@ -45,17 +50,15 @@ impl Client {
             .connect()
             .await?;
 
-        let token = match load_token() {
-            Ok(token) => token,
-            Err(_) => enroll(channel.clone(), deploy_token).await?,
-        };
+        let sess_keeper = SessionKeeper::new(channel.clone(), deploy_token).await?;
+        let auth_interceptor = AuthInterceptor{token: sess_keeper.get_auth_token()};
+        let sess_keeper_task = tokio::task::spawn(sess_keeper.refresh_loop());
+        let inventory_svc = InventoryServiceClient::with_interceptor(channel, auth_interceptor);
 
-        let auth_val: AsciiMetadataValue = format!("Bearer {token}").parse()?;
-        let auth_interceptor = AuthInterceptor{auth_val};
-
-        let inner = InventoryServiceClient::with_interceptor(channel, auth_interceptor);
-
-        Ok(Self{inner})
+        Ok(Self{
+            inventory_svc,
+            sess_keeper_task,
+        })
     }
 
     pub async fn upload_sbom(&mut self, sbom_reader: std::fs::File) -> Result<()> {
@@ -63,7 +66,7 @@ impl Client {
         let header_req = pb::UploadSbomRequest{
             kind: Some(pb::upload_sbom_request::Kind::Header(
                 pb::UploadSbomHeader{
-                    format: pb::SbomFormat::SbomfmtSyft as i32,
+                    format: pb::SbomFormat::Syft as i32,
                 },
             )),
         };
@@ -76,7 +79,7 @@ impl Client {
         let result = Arc::new(Mutex::new(Result::Ok(())));
         let stream = header_stream.chain(data_stream(sbom_reader, result.clone()));
 
-        self.inner.upload_sbom(stream).await?;
+        self.inventory_svc.upload_sbom(stream).await?;
 
         std::sync::Arc::<std::sync::Mutex<Result<(), anyhow::Error>>>::try_unwrap(result)
             .unwrap()
@@ -98,20 +101,14 @@ impl Client {
             in_use,
         };
 
-        self.inner.report_in_use(req).await?;
+        self.inventory_svc.report_in_use(req).await?;
         Ok(())
     }
-}
 
-fn load_token() -> Result<String> {
-    Ok(std::fs::read_to_string(TOKEN_FILE)?)
-}
-
-fn save_token(token: &str) -> Result<()> {
-    let token_file = PathBuf::from(TOKEN_FILE);
-    let dir = token_file.parent().unwrap();
-    std::fs::create_dir_all(dir)?;
-    Ok(std::fs::write(TOKEN_FILE, token)?)
+    pub async fn stop(self) {
+        self.sess_keeper_task.abort();
+        _ = self.sess_keeper_task.await;
+    }
 }
 
 fn hostname() -> String {
@@ -122,24 +119,177 @@ fn hostname() -> String {
         })
 }
 
-async fn enroll(channel: Channel, deploy_token: String) -> Result<String> {
-    let mut enroll_svc = EnrollmentServiceClient::new(channel);
+#[derive(Clone)]
+struct AuthToken {
+    token: Arc<Mutex<AsciiMetadataValue>>,
+}
 
-    let req = pb::EnrollAgentRequest{
-        deployment_token: deploy_token,
-        hostname: hostname(),
-    };
+impl AuthToken {
+    fn new(val: &str) -> Result<Self> {
+        let token = format_bearer(val)?;
 
-    let resp = enroll_svc.enroll_agent(req)
-        .await?
-        .into_inner();
+        Ok(Self {
+            token: Arc::new(Mutex::new(token)),
+        })
+    }
 
-    save_token(&resp.agent_token)
-        .unwrap_or_else(|err| {
-            error!("Error saving agent token: {err}");
-        });
+    fn get(&self) -> AsciiMetadataValue {
+        self.token.lock()
+            .unwrap()
+            .clone()
+    }
 
-    Ok(resp.agent_token)
+    fn set(&self, val: &str) -> Result<()> {
+        let mut lk = self.token.lock().unwrap();
+        *lk = format_bearer(val)?;
+        Ok(())
+    }
+}
+
+fn format_bearer(val: &str) -> Result<AsciiMetadataValue> {
+    Ok(format!("Bearer {val}").parse()?)
+}
+
+
+struct RefreshToken {
+    token: String,
+}
+
+impl RefreshToken {
+    fn new(token: String) -> Self {
+        Self{
+            token,
+        }
+    }
+    fn load() -> Result<Self> {
+        let token = std::fs::read_to_string(TOKEN_FILE)?;
+        Ok(Self{token})
+    }
+
+    fn save(&self) -> Result<()> {
+        let token_file = PathBuf::from(TOKEN_FILE);
+        let dir = token_file.parent().unwrap();
+        std::fs::create_dir_all(dir)?;
+        Ok(std::fs::write(TOKEN_FILE, &self.token)?)
+    }
+
+    fn get(&self) -> String {
+        self.token.clone()
+    }
+}
+
+struct SessionKeeper {
+    refresh_token: RefreshToken,
+    auth_token: AuthToken,
+    expiration: SystemTime,
+    channel: Channel,
+}
+
+impl SessionKeeper {
+    async fn new(channel: Channel, deploy_token: String) -> Result<Self> {
+        let mut token_svc = TokenServiceClient::new(channel.clone());
+
+        let (refresh_token, session_token, expiration) = match RefreshToken::load() {
+            Ok(refresh_token) => {
+                let req = pb::GetSessionTokenRequest{
+                    refresh_token: refresh_token.get(),
+                };
+
+                let resp = token_svc.get_session_token(req).await?
+                    .into_inner();
+
+                (refresh_token, resp.session_token, resp.session_token_expiration)
+            },
+            Err(_) => {
+                let req = pb::EnrollAgentRequest{
+                    deployment_token: deploy_token,
+                    hostname: hostname(),
+                };
+
+                let resp = token_svc.enroll_agent(req)
+                    .await?
+                    .into_inner();
+
+                let refresh_token = RefreshToken::new(resp.refresh_token);
+                refresh_token.save()
+                    .unwrap_or_else(|err| {
+                        error!("Error saving agent token: {err}");
+                    });
+
+                (refresh_token, resp.session_token, resp.session_token_expiration)
+            }
+        };
+
+        let auth_token = AuthToken::new(&session_token)?;
+        let expiration = get_expiration(expiration);
+
+        Ok(Self{
+            refresh_token,
+            auth_token,
+            expiration,
+            channel,
+        })
+    }
+
+    fn get_auth_token(&self) -> AuthToken {
+        self.auth_token.clone()
+    }
+
+    async fn refresh_loop(self) {
+        let mut token_svc = TokenServiceClient::new(self.channel);
+        let mut expiration = self.expiration;
+
+        loop {
+            let mut interval = expiration.duration_since(SystemTime::now())
+                .unwrap_or_else(|_| {
+                    error!("Session expiration is in the past");
+                    DEFAULT_EXPIRATION
+                });
+
+            interval = interval.checked_sub(EXPIRATION_SLACK)
+                .unwrap_or(interval);
+
+            info!("Sleeping for {interval:?}");
+
+            tokio::time::sleep(interval).await;
+
+            let req = pb::GetSessionTokenRequest{
+                refresh_token: self.refresh_token.get(),
+            };
+
+            expiration = match token_svc.get_session_token(req).await {
+                Ok(resp) => {
+                    let resp = resp.into_inner();
+                    self.auth_token.set(&resp.session_token).unwrap();
+                    info!("Session renewed");
+                    get_expiration(resp.session_token_expiration)
+                },
+                Err(err) => {
+                    error!("Session renewal failed: {err}");
+                    SystemTime::now() + EXPIRATION_SLACK
+                }
+            }
+        }
+    }
+}
+
+fn get_expiration(expiration: Option<prost_types::Timestamp>) -> SystemTime {
+    match expiration {
+        Some(expiration) => {
+            match SystemTime::try_from(expiration) {
+                Ok(expiration) => expiration,
+                Err(_) => {
+                    error!("Invalid session expiration time");
+                    SystemTime::now() + DEFAULT_EXPIRATION
+                }
+
+            }
+        },
+        None => {
+            error!("Session token is missing expiration");
+            SystemTime::now() + DEFAULT_EXPIRATION
+        }
+    }
 }
 
 fn data_stream<'a, R: Read + Send + 'a>(mut rd: R, result: Arc<Mutex<Result<()>>>) -> impl Stream<Item=pb::UploadSbomRequest> + Send {

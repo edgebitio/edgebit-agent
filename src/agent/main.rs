@@ -92,7 +92,11 @@ async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut Re
             Ok(filename) => {
                 let filenames = vec![filename];
                 let pkgs = pkg_registry.get_packages(filenames);
-                _ = client.report_in_use(pkgs).await;
+                if !pkgs.is_empty() {
+                    if let Err(err) = client.report_in_use(pkgs).await {
+                        error!("report_in_use failed: {err}");
+                    }
+                }
             },
 
             Err(_) => (),

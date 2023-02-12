@@ -1,22 +1,23 @@
 use std::sync::Arc;
+use std::time::{SystemTime, Duration};
 
 use anyhow::Result;
 use tonic::{Request, Response, Status, Streaming};
 use tonic::transport::Server;
 
 pub mod pb {
-    tonic::include_proto!("edgebit.v1alpha.enrollment");
-    tonic::include_proto!("edgebit.v1alpha.inventory");
+    tonic::include_proto!("edgebit.agent.v1alpha");
+    pub use ::prost_types::Timestamp;
 }
 
-use pb::enrollment_service_server::{EnrollmentService, EnrollmentServiceServer};
+use pb::token_service_server::{TokenService, TokenServiceServer};
 use pb::inventory_service_server::{InventoryService, InventoryServiceServer};
 
 #[derive(Debug, Default)]
 pub struct Service {}
 
 #[tonic::async_trait]
-impl EnrollmentService for Service {
+impl TokenService for Service {
     async fn enroll_agent(
         &self,
         request: Request<pb::EnrollAgentRequest>,
@@ -24,8 +25,28 @@ impl EnrollmentService for Service {
 
         println!("enroll_agent: {:?}", request);
 
+        let expiration = SystemTime::now() + Duration::from_secs(180);
+
         let reply = pb::EnrollAgentResponse{
-            agent_token: "XYZTOKEN".to_string(),
+            refresh_token: "REFRESH_TOKEN".to_string(),
+            session_token: "SESSION_TOKEN".to_string(),
+            session_token_expiration: Some(expiration.into()),
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn get_session_token(
+        &self,
+        request: Request<pb::GetSessionTokenRequest>,
+    ) -> Result<Response<pb::GetSessionTokenResponse>, Status> {
+
+        println!("get_session_token: {:?}", request);
+
+        let expiration = SystemTime::now() + Duration::from_secs(180);
+
+        let reply = pb::GetSessionTokenResponse{
+            session_token: "SESSION_TOKEN".to_string(),
+            session_token_expiration: Some(expiration.into()),
         };
         Ok(Response::new(reply))
     }
@@ -36,7 +57,7 @@ impl InventoryService for Service {
     async fn upload_sbom(
         &self,
         request: Request<Streaming<pb::UploadSbomRequest>>,
-    ) -> Result<Response<pb::Void>, Status> {
+    ) -> Result<Response<pb::UploadSbomResponse>, Status> {
         let mut request = request.into_inner();
         let mut whole = Vec::new();
 
@@ -49,7 +70,7 @@ impl InventoryService for Service {
                 },
                 Ok(None) => {
                     println!("upload_sbom: len={}", whole.len());
-                    return Ok(Response::new(pb::Void{}));
+                    return Ok(Response::new(pb::UploadSbomResponse{}));
                 },
                 Err(e) => { return Err(e); },
             }
@@ -59,10 +80,10 @@ impl InventoryService for Service {
     async fn report_in_use(
         &self,
         request: Request<pb::ReportInUseRequest>,
-    ) -> Result<Response<pb::Void>, Status> {
+    ) -> Result<Response<pb::ReportInUseResponse>, Status> {
 
         println!("report_in_use: {:?}", request);
-        Ok(Response::new(pb::Void{}))
+        Ok(Response::new(pb::ReportInUseResponse{}))
     }
 }
 
@@ -72,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let svc = Arc::new(Service::default());
 
     Server::builder()
-        .add_service(EnrollmentServiceServer::from_arc(svc.clone()))
+        .add_service(TokenServiceServer::from_arc(svc.clone()))
         .add_service(InventoryServiceServer::from_arc(svc.clone()))
         .serve(addr)
         .await?;
