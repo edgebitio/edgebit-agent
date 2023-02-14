@@ -2,7 +2,7 @@
 
 arch=$(uname -i)
 
-: "${VERSION:=0.0.5}"
+: "${VERSION:=0.0.6}"
 : "${EDGEBIT_URL:=https://app.edgebit.io}"
 : "${TARBALL_URL:=https://install.edgebit.io/edgebit-${arch}-v${VERSION}.tar.gz}"
 : "${PREFIX:=/opt}"
