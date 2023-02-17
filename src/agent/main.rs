@@ -2,6 +2,8 @@ pub mod open_monitor;
 pub mod control_plane;
 pub mod sbom;
 pub mod registry;
+pub mod containers;
+pub mod fanotify;
 
 use std::{path::Path, time::SystemTime};
 
@@ -11,12 +13,13 @@ use log::*;
 use clap::Parser;
 use uuid::Uuid;
 
-use open_monitor::OpenEvent;
+use open_monitor::{OpenMonitor, OpenEvent};
 use registry::Registry;
 use sbom::Sbom;
 use control_plane::pb;
 
 const BASEOS_ID_PATH: &str = "/var/lib/edgebit/baseos-id";
+use containers::{DockerContainers, ContainerEvent};
 
 #[derive(Parser)]
 struct CliArgs {
@@ -86,7 +89,7 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     let workload = HostWorkload::load();
 
-    info!("Registering workload");
+    info!("Registering BaseOS workload");
     register_workload(&mut client, &workload, sbom.id()).await?;
 
     info!("Starting to monitor packages in use");
@@ -95,28 +98,37 @@ async fn run(args: &CliArgs) -> Result<()> {
 }
 
 async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut Registry, workload_id: &str) -> Result<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
-    let monitor_task = tokio::task::spawn_blocking(move || open_monitor::run(tx));
+    let (open_tx, mut open_rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
+    let monitor = OpenMonitor::start(open_tx)?;
+    monitor.add_path("/")?;
 
-    // batch in 1s intervals
+    let (cont_tx, mut cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
+    let conts = DockerContainers::track(cont_tx).await?;
 
-    while let Some(evt) = rx.recv().await {
-        match evt.filename.into_string() {
-            Ok(filename) => {
-                let filenames = vec![filename];
-                let pkgs = pkg_registry.get_packages(filenames);
-                if !pkgs.is_empty() {
-                    if let Err(err) = client.report_in_use(workload_id.to_string(), pkgs).await {
-                        error!("report_in_use failed: {err}");
-                    }
-                }
-            },
-
-            Err(_) => (),
+    for (_, info) in conts.all() {
+        if let Some(rootfs) = info.rootfs {
+            monitor.add_path(&rootfs)?;
         }
     }
 
-    monitor_task.await.unwrap().unwrap();
+    loop {
+        tokio::select!{
+            evt = open_rx.recv() => {
+                match evt {
+                    Some(evt) => handle_open_event(pkg_registry, client, evt, workload_id.to_string()).await,
+                    None => break,
+                }
+            },
+            evt = cont_rx.recv() => {
+                match evt {
+                    Some(evt) => handle_container_event(client, &monitor, evt).await,
+                    None => break,
+                }
+            }
+        }
+    }
+
+    monitor.stop().await;
 
     Ok(())
 }
@@ -143,8 +155,77 @@ async fn register_workload(client: &mut control_plane::Client, workload: &HostWo
     client.upsert_workload(req).await
 }
 
+async fn handle_open_event(pkg_registry: &Registry, client: &mut control_plane::Client, evt: OpenEvent, workload_id: String) {
+    match evt.filename.into_string() {
+        Ok(filename) => {
+            debug!("[{}]: {filename}", evt.cgroup_name);
+
+            let filenames = vec![filename];
+            let pkgs = pkg_registry.get_packages(filenames);
+            if !pkgs.is_empty() {
+                if let Err(err) = client.report_in_use(workload_id, pkgs).await {
+                    error!("report_in_use failed: {err}");
+                }
+            }
+        },
+
+        Err(name) => {
+            error!("Non UTF-8 filename opened: {}", name.to_string_lossy());
+        }
+    }
+}
+
+async fn handle_container_event(client: &mut control_plane::Client, monitor: &OpenMonitor, evt: ContainerEvent) {
+    match evt {
+        ContainerEvent::Started(id, info) => {
+            match info.rootfs {
+                Some(rootfs) => {
+                    if let Err(err) = monitor.add_path(&rootfs) {
+                        error!("Failed to start monitoring {} for container {}", rootfs, id);
+                    }
+                },
+                None => error!("Container {id} started but rootfs missing"),
+            }
+
+            _ = client.upsert_workload(pb::UpsertWorkloadRequest{
+                    workload_id: id,
+                    workload: Some(pb::Workload{
+                        group: Vec::new(),
+                        kind: Some(pb::workload::Kind::Container(pb::Container{
+                            name: info.name.unwrap_or(String::new()),
+                        })),
+                    }),
+                    start_time: info.start_time.map(|t| t.into()),
+                    end_time: None,
+                    image_id: info.image_id.unwrap_or(String::new()),
+                    image: Some(pb::Image{
+                        kind: Some(pb::image::Kind::Docker(pb::DockerImage{
+                            tag: info.image.unwrap_or(String::new()),
+                        })),
+                    }),
+            }).await;
+        },
+        ContainerEvent::Stopped(id, info) => {
+            match info.rootfs {
+                Some(rootfs) => {
+                    if let Err(err) = monitor.remove_path(&rootfs) {
+                        error!("Failed to stop monitoring {} for container {}", rootfs, id);
+                    }
+                },
+                None => error!("Container {id} stopped but rootfs missing"),
+            }
+
+            _ = client.upsert_workload(pb::UpsertWorkloadRequest{
+                workload_id: id,
+                end_time: info.end_time.map(|t| t.into()),
+                ..Default::default()
+            }).await;
+        }
+    };
+}
+
 async fn upload_sbom(client: &mut control_plane::Client, path: &Path, image_id: String) -> Result<()> {
-    info!("Uploading SBOM to EdgeBit");
+    info!("Uploading SBOM to Edgebit");
     let f = std::fs::File::open(path)?;
     client.upload_sbom(image_id, f).await?;
     Ok(())
