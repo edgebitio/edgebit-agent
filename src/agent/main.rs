@@ -2,21 +2,21 @@ pub mod open_monitor;
 pub mod control_plane;
 pub mod sbom;
 pub mod registry;
+pub mod containers;
+pub mod fanotify;
+pub mod workload_mgr;
 
 use std::{path::Path, time::SystemTime};
 
 use anyhow::{Result, anyhow};
-use gethostname::gethostname;
 use log::*;
 use clap::Parser;
-use uuid::Uuid;
+use tokio::sync::mpsc::{Receiver};
 
-use open_monitor::OpenEvent;
-use registry::Registry;
 use sbom::Sbom;
 use control_plane::pb;
-
-const BASEOS_ID_PATH: &str = "/var/lib/edgebit/baseos-id";
+use containers::ContainerInfo;
+use workload_mgr::{WorkloadManager, Event, HostWorkload};
 
 #[derive(Parser)]
 struct CliArgs {
@@ -51,7 +51,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     let token = std::env::var("EDGEBIT_ID")
         .map_err(|_| anyhow!("Is EDGEBIT_ID env var set?"))?;
 
-    info!("Connecting to Edgebit at {url}");
+    info!("Connecting to EdgeBit at {url}");
     let mut client = control_plane::Client::connect(
         url.try_into()?,
         token.try_into()?,
@@ -82,46 +82,30 @@ async fn run(args: &CliArgs) -> Result<()> {
         },
     };
 
-    let mut pkg_registry = Registry::from_sbom(&sbom)?;
+    let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
+    let wl_mgr = WorkloadManager::start(sbom, events_tx).await?;
 
-    let workload = HostWorkload::load();
-
-    info!("Registering workload");
-    register_workload(&mut client, &workload, sbom.id()).await?;
+    info!("Registering BaseOS workload");
+    register_host_workload(&mut client, wl_mgr.get_host_workload()).await?;
 
     info!("Starting to monitor packages in use");
-    report_in_use(&mut client, &mut pkg_registry, &workload.id).await?;
+    report_in_use(&mut client, &wl_mgr, events_rx).await;
+
     Ok(())
 }
 
-async fn report_in_use(client: &mut control_plane::Client, pkg_registry: &mut Registry, workload_id: &str) -> Result<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
-    let monitor_task = tokio::task::spawn_blocking(move || open_monitor::run(tx));
-
-    // batch in 1s intervals
-
-    while let Some(evt) = rx.recv().await {
-        match evt.filename.into_string() {
-            Ok(filename) => {
-                let filenames = vec![filename];
-                let pkgs = pkg_registry.get_packages(filenames);
-                if !pkgs.is_empty() {
-                    if let Err(err) = client.report_in_use(workload_id.to_string(), pkgs).await {
-                        error!("report_in_use failed: {err}");
-                    }
-                }
-            },
-
-            Err(_) => (),
+async fn report_in_use(client: &mut control_plane::Client, workloads: &WorkloadManager, mut events: Receiver<Event>) {
+    loop {
+        match events.recv().await {
+            Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
+            Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
+            Some(Event::PackageInUse(id, pkgs)) => _ = client.report_in_use(id, pkgs).await,
+            None => break,
         }
     }
-
-    monitor_task.await.unwrap().unwrap();
-
-    Ok(())
 }
 
-async fn register_workload(client: &mut control_plane::Client, workload: &HostWorkload, image_id: String) -> Result<()> {
+async fn register_host_workload(client: &mut control_plane::Client, workload: &HostWorkload) -> Result<()> {
     let req = pb::UpsertWorkloadRequest {
         workload_id: workload.id.clone(),
         workload: Some(pb::Workload{
@@ -134,7 +118,7 @@ async fn register_workload(client: &mut control_plane::Client, workload: &HostWo
         }),
         start_time: Some(SystemTime::now().into()),
         end_time: None,
-        image_id: image_id,
+        image_id: workload.image_id.clone(),
         image: Some(pb::Image{
             kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
         }),
@@ -143,67 +127,37 @@ async fn register_workload(client: &mut control_plane::Client, workload: &HostWo
     client.upsert_workload(req).await
 }
 
+async fn handle_container_started(client: &mut control_plane::Client, id: String, info: ContainerInfo) {
+    _ = client.upsert_workload(pb::UpsertWorkloadRequest{
+            workload_id: id,
+            workload: Some(pb::Workload{
+                group: Vec::new(),
+                kind: Some(pb::workload::Kind::Container(pb::Container{
+                    name: info.name.unwrap_or(String::new()),
+                })),
+            }),
+            start_time: info.start_time.map(|t| t.into()),
+            end_time: None,
+            image_id: info.image_id.unwrap_or(String::new()),
+            image: Some(pb::Image{
+                kind: Some(pb::image::Kind::Docker(pb::DockerImage{
+                    tag: info.image.unwrap_or(String::new()),
+                })),
+            }),
+    }).await;
+}
+
+async fn handle_container_stopped(client: &mut control_plane::Client, id: String, info: ContainerInfo) {
+    _ = client.upsert_workload(pb::UpsertWorkloadRequest{
+        workload_id: id,
+        end_time: info.end_time.map(|t| t.into()),
+        ..Default::default()
+    }).await;
+}
+
 async fn upload_sbom(client: &mut control_plane::Client, path: &Path, image_id: String) -> Result<()> {
     info!("Uploading SBOM to EdgeBit");
     let f = std::fs::File::open(path)?;
     client.upload_sbom(image_id, f).await?;
     Ok(())
-}
-
-struct HostWorkload {
-    id: String,
-    group: Vec<String>,
-    host: String,
-    os_pretty_name: String,
-}
-
-impl HostWorkload {
-    fn load() -> Self {
-        let id = load_baseos_id();
-
-        let host = gethostname()
-            .to_string_lossy()
-            .into_owned();
-
-        let os_pretty_name = match rs_release::get_os_release() {
-            Ok(mut os_release) => {
-                os_release.remove("PRETTY_NAME")
-                    .or_else(|| os_release.remove("NAME"))
-                    .unwrap_or("Linux".to_string())
-            },
-            Err(err) => {
-                error!("Failed to retrieve os-release: {err}");
-                String::new()
-            }
-        };
-
-        Self {
-            id,
-            group: Vec::new(),
-            host,
-            os_pretty_name,
-        }
-    }
-}
-
-fn load_baseos_id() -> String {
-    if let Ok(id) = std::fs::read_to_string(BASEOS_ID_PATH) {
-        return id;
-    }
-
-    let id = uuid_string();
-
-    if let Err(err) = std::fs::write(BASEOS_ID_PATH, &id) {
-        error!("Failed to save BaseOS workload ID to {BASEOS_ID_PATH}: {err}");
-    }
-
-    id
-}
-
-fn uuid_string() -> String {
-    let mut buf = Uuid::encode_buffer();
-    Uuid::new_v4()
-        .as_hyphenated()
-        .encode_lower(&mut buf)
-        .to_string()
 }
