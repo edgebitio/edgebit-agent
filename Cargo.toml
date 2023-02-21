@@ -24,6 +24,8 @@ libbpf-rs = { version = "0.19.1", features = ["static"] }
 futures = "0.3"
 async-stream = "0.3"
 temp-file = "0.1"
+rs-release = "0.1.9"
+uuid = { version = "1.3.0", features = ["v4"] }
 
 [build-dependencies]
 tonic-build = "0.8"

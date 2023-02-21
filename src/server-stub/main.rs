@@ -64,17 +64,36 @@ impl InventoryService for Service {
         loop {
             match request.message().await {
                 Ok(Some(msg)) => {
-                    if let Some(pb::upload_sbom_request::Kind::Data(mut part)) = msg.kind {
-                        whole.append(&mut part);
+                    match msg.kind {
+                        Some(pb::upload_sbom_request::Kind::Header(hdr)) => {
+                            println!("upload_sbom: {hdr:?}");
+                        },
+
+                        Some(pb::upload_sbom_request::Kind::Data(mut part)) => {
+                            whole.append(&mut part);
+                        },
+
+                        _ => (),
                     }
                 },
+
                 Ok(None) => {
                     println!("upload_sbom: len={}", whole.len());
                     return Ok(Response::new(pb::UploadSbomResponse{}));
                 },
+
                 Err(e) => { return Err(e); },
             }
         }
+    }
+
+    async fn upsert_workload(
+        &self,
+        request: Request<pb::UpsertWorkloadRequest>,
+    ) -> Result<Response<pb::UpsertWorkloadResponse>, Status> {
+
+        println!("upsert_workload: {:?}", request);
+        Ok(Response::new(pb::UpsertWorkloadResponse{}))
     }
 
     async fn report_in_use(

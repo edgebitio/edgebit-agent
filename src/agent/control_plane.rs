@@ -61,12 +61,16 @@ impl Client {
         })
     }
 
-    pub async fn upload_sbom(&mut self, sbom_reader: std::fs::File) -> Result<()> {
+    pub async fn upload_sbom(&mut self, image_id: String, sbom_reader: std::fs::File) -> Result<()> {
         // Header first
         let header_req = pb::UploadSbomRequest{
             kind: Some(pb::upload_sbom_request::Kind::Header(
                 pb::UploadSbomHeader{
                     format: pb::SbomFormat::Syft as i32,
+                    image_id,
+                    image: Some(pb::Image{
+                        kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
+                    }),
                 },
             )),
         };
@@ -87,7 +91,12 @@ impl Client {
             .unwrap()
     }
 
-    pub async fn report_in_use(&mut self, pkgs: Vec<PkgRef>) -> Result<()> {
+    pub async fn upsert_workload(&mut self, workload: pb::UpsertWorkloadRequest) -> Result<()> {
+        self.inventory_svc.upsert_workload(workload).await?;
+        Ok(())
+    }
+
+    pub async fn report_in_use(&mut self, workload_id: String, pkgs: Vec<PkgRef>) -> Result<()> {
         let in_use = pkgs.into_iter()
             .map(|p| {
                 pb::PkgInUse{
@@ -99,6 +108,7 @@ impl Client {
 
         let req = pb::ReportInUseRequest{
             in_use,
+            workload_id,
         };
 
         self.inventory_svc.report_in_use(req).await?;

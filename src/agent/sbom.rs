@@ -56,11 +56,16 @@ impl Sbom {
     pub fn artifacts(&self) -> &Vec<Artifact> {
         &self.doc.artifacts
     }
+
+    pub fn id(&self) -> String {
+        self.doc.source.id.clone()
+    }
 }
 
 #[derive(Deserialize)]
 struct SbomDoc {
     artifacts: Vec<Artifact>,
+    source: Source,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +105,11 @@ impl Artifact {
 
         Ok(paths)
     }
+}
+
+#[derive(Deserialize)]
+struct Source {
+    pub id: String,
 }
 
 #[derive(Deserialize)]
