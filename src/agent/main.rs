@@ -31,6 +31,9 @@ struct CliArgs {
 async fn main() {
     pretty_env_logger::init();
 
+    let version = env!("CARGO_PKG_VERSION");
+    info!("EdgeBit Agent v{version}");
+
     let args = CliArgs::parse();
     match run(&args).await {
         Ok(_) => {},
