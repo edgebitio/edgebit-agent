@@ -1,25 +1,32 @@
+pub mod config;
 pub mod open_monitor;
-pub mod control_plane;
+pub mod platform;
 pub mod sbom;
 pub mod registry;
 pub mod containers;
 pub mod fanotify;
 pub mod workload_mgr;
 
-use std::{path::Path, time::SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
 use tokio::sync::mpsc::{Receiver};
 
+use config::Config;
 use sbom::Sbom;
-use control_plane::pb;
+use platform::pb;
 use containers::ContainerInfo;
 use workload_mgr::{WorkloadManager, Event, HostWorkload};
 
 #[derive(Parser)]
 struct CliArgs {
+    #[clap(long = "config")]
+    config: Option<PathBuf>,
+
     #[clap(long = "sbom")]
     sbom: Option<String>,
 
@@ -29,30 +36,36 @@ struct CliArgs {
 
 #[tokio::main]
 async fn main() {
+    let args = CliArgs::parse();
+
+    match run(&args).await {
+        Ok(_) => {},
+        Err(err) => eprintln!("{err}"),
+    }
+}
+
+async fn run(args: &CliArgs) -> Result<()> {
+    let config_path = match &args.config {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(config::CONFIG_PATH),
+    };
+
+    let config = Config::load(config_path)
+        .map_err(|err| anyhow!("Error loading config file: {err}"))?;
+
+    let config = Arc::new(config);
+
+    std::env::set_var("RUST_LOG", config.log_level());
     pretty_env_logger::init();
 
     let version = env!("CARGO_PKG_VERSION");
     info!("EdgeBit Agent v{version}");
 
-    let args = CliArgs::parse();
-    match run(&args).await {
-        Ok(_) => {},
-        Err(err) => {
-            eprintln!("err: {err}");
-            eprintln!("src: {}", err.source().unwrap());
-        }
-    }
-}
-
-async fn run(args: &CliArgs) -> Result<()> {
-    let url = std::env::var("EDGEBIT_URL")
-        .map_err(|_| anyhow!("Is EDGEBIT_URL env var set?"))?;
-
-    let token = std::env::var("EDGEBIT_ID")
-        .map_err(|_| anyhow!("Is EDGEBIT_ID env var set?"))?;
+    let url = config.edgebit_url();
+    let token = config.edgebit_id();
 
     info!("Connecting to EdgeBit at {url}");
-    let mut client = control_plane::Client::connect(
+    let mut client = platform::Client::connect(
         url.try_into()?,
         token.try_into()?,
     ).await?;
@@ -71,7 +84,7 @@ async fn run(args: &CliArgs) -> Result<()> {
         },
         None => {
             info!("Generating SBOM");
-            let tmp_file = sbom::generate()?;
+            let tmp_file = sbom::generate(config.clone())?;
             let sbom = Sbom::load(tmp_file.path())?;
 
             if !args.no_sbom_upload {
@@ -83,18 +96,19 @@ async fn run(args: &CliArgs) -> Result<()> {
     };
 
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
-    let wl_mgr = WorkloadManager::start(sbom, events_tx).await?;
+    let wl_mgr = WorkloadManager::start(sbom, config, events_tx).await?;
 
     info!("Registering BaseOS workload");
-    register_host_workload(&mut client, wl_mgr.get_host_workload()).await?;
+    let req = wl_mgr.with_host_workload(to_upsert_workload_req);
+    client.upsert_workload(req).await?;
 
     info!("Starting to monitor packages in use");
-    report_in_use(&mut client, &wl_mgr, events_rx).await;
+    report_in_use(&mut client, events_rx).await;
 
     Ok(())
 }
 
-async fn report_in_use(client: &mut control_plane::Client, workloads: &WorkloadManager, mut events: Receiver<Event>) {
+async fn report_in_use(client: &mut platform::Client, mut events: Receiver<Event>) {
     loop {
         match events.recv().await {
             Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
@@ -105,8 +119,8 @@ async fn report_in_use(client: &mut control_plane::Client, workloads: &WorkloadM
     }
 }
 
-async fn register_host_workload(client: &mut control_plane::Client, workload: &HostWorkload) -> Result<()> {
-    let req = pb::UpsertWorkloadRequest {
+fn to_upsert_workload_req(workload: &HostWorkload) -> pb::UpsertWorkloadRequest {
+    pb::UpsertWorkloadRequest {
         workload_id: workload.id.clone(),
         workload: Some(pb::Workload{
             group: workload.group.clone(),
@@ -122,12 +136,10 @@ async fn register_host_workload(client: &mut control_plane::Client, workload: &H
         image: Some(pb::Image{
             kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
         }),
-    };
-
-    client.upsert_workload(req).await
+    }
 }
 
-async fn handle_container_started(client: &mut control_plane::Client, id: String, info: ContainerInfo) {
+async fn handle_container_started(client: &mut platform::Client, id: String, info: ContainerInfo) {
     _ = client.upsert_workload(pb::UpsertWorkloadRequest{
             workload_id: id,
             workload: Some(pb::Workload{
@@ -147,7 +159,7 @@ async fn handle_container_started(client: &mut control_plane::Client, id: String
     }).await;
 }
 
-async fn handle_container_stopped(client: &mut control_plane::Client, id: String, info: ContainerInfo) {
+async fn handle_container_stopped(client: &mut platform::Client, id: String, info: ContainerInfo) {
     _ = client.upsert_workload(pb::UpsertWorkloadRequest{
         workload_id: id,
         end_time: info.end_time.map(|t| t.into()),
@@ -155,7 +167,7 @@ async fn handle_container_stopped(client: &mut control_plane::Client, id: String
     }).await;
 }
 
-async fn upload_sbom(client: &mut control_plane::Client, path: &Path, image_id: String) -> Result<()> {
+async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: String) -> Result<()> {
     info!("Uploading SBOM to EdgeBit");
     let f = std::fs::File::open(path)?;
     client.upload_sbom(image_id, f).await?;

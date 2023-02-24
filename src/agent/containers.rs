@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::ffi::OsStr;
 use std::time::UNIX_EPOCH;
 use std::time::{SystemTime, Duration};
 
@@ -15,7 +14,7 @@ use bollard::container::ListContainersOptions;
 use futures::stream::{Stream, StreamExt};
 use lazy_static::lazy_static;
 use regex::Regex;
-use chrono::{DateTime, offset::Utc};
+use chrono::{DateTime, offset::Utc, offset::FixedOffset};
 
 const DOCKER_HOST: &str = "unix:///var/run/docker.sock";
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay2";
@@ -25,6 +24,8 @@ lazy_static! {
     // "/docker/<container_id>"
     // "docker-<container_id>.scope"
     static ref CGROUP_NAME_RE: Regex = Regex::new(r".*docker.([[:xdigit:]]{64})(?:\.scope)?").unwrap();
+
+    static ref DT_UNIX_EPOCH: DateTime<FixedOffset> = DateTime::parse_from_rfc3339("1970-01-01T00:00:00-00:00").unwrap();
 }
 
 #[derive(Clone, Debug)]
@@ -243,6 +244,7 @@ async fn inspect_container(docker: &Docker, id: &str) -> Result<ContainerInfo> {
             let finished = state.finished_at
                 .map(|t| t.parse::<DateTime<Utc>>().ok())
                 .flatten()
+                .filter(|t| t > &DT_UNIX_EPOCH)
                 .map(|t| t.into());
 
             (started, finished)

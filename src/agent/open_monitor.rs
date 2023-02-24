@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 use std::path::Path;
 use std::ffi::{OsStr, OsString};
 use std::os::fd::AsRawFd;
@@ -9,17 +9,13 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use log::*;
 use libbpf_rs::{PerfBufferBuilder, MapFlags};
-use bytemuck::{Pod, Zeroable};
 
-use edgebit_agent::common_defs::EvtOpen;
 use crate::fanotify::Fanotify;
 
 mod probes {
     include!(concat!(env!("OUT_DIR"), "/probes.skel.rs"));
 }
 
-const MINORBITS: usize = 20;
-const EVENTS_BUF_SIZE: usize = 128; // size in pages
 const ZOMBIE_EVENTS_BUF_SIZE: usize = 4;
 
 #[derive(Clone)]
@@ -190,11 +186,19 @@ impl OpenMonitor {
         _ = self.zombie_task.await;
     }
 
-    pub fn add_path(&self, path: &str) -> Result<()> {
+    // NB: Adds the mountpoint of path, not actual path.
+    pub fn add_path(&self, path: &Path) -> Result<()> {
+        let path = path.to_str()
+            .ok_or_else(|| anyhow!("{} contains non-UTF8 bytes", path.to_string_lossy()))?;
+
         self.fan.add_open_mark(path)
     }
 
-    pub fn remove_path(&self, path: &str) -> Result<()> {
+    // NB: Removes the mountpoint of path, not actual path.
+    pub fn remove_path(&self, path: &Path) -> Result<()> {
+        let path = path.to_str()
+            .ok_or_else(|| anyhow!("{} contains non-UTF8 bytes", path.to_string_lossy()))?;
+
         self.fan.remove_open_mark(path)
     }
 }
@@ -256,76 +260,3 @@ pub struct OpenEvent {
     pub cgroup_name: String,
     pub filename: OsString,
 }
-
-/*
-type DevIno = (u64, u64);
-
-pub struct InodeCache {
-    inner: HashMap<DevIno, OsString>,
-}
-
-impl InodeCache {
-    pub fn new() -> Self {
-        Self{
-            inner: HashMap::new(),
-        }
-    }
-
-    pub fn load() -> Result<Self> {
-        let mut cache = HashMap::new();
-        traverse("/", &mut cache)?;
-        Ok(Self{
-            inner: cache,
-        })
-    }
-
-    pub fn lookup(&self, dev: u64, ino: u64) -> Option<&OsString> {
-        self.inner.get(&(dev, ino))
-    }
-}
-
-fn traverse<P: AsRef<Path>>(path: P, cache: &mut HashMap<DevIno, OsString>) -> Result<()> {
-    let path = path.as_ref();
-    for dirent in std::fs::read_dir(path)? {
-        if let Ok(dirent) = dirent {
-            if let Ok(file_type) = dirent.file_type() {
-                let mut full_name = path.to_path_buf();
-                full_name.push(dirent.file_name());
-                if file_type.is_dir() {
-                    if is_system_dir(&full_name) {
-                        continue;
-                    }
-                    _ = traverse(full_name, cache);
-                } else if file_type.is_file() {
-                    if let Ok(meta) = dirent.metadata() {
-                        use std::os::linux::fs::MetadataExt;
-                        let dev = dev_libc_to_kernel(meta.st_dev());
-                        let devino = (dev, meta.st_ino());
-
-                        trace!("{} @ {devino:?}", full_name.to_string_lossy());
-                        cache.insert(devino, full_name.into_os_string());
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn is_system_dir(path: &Path) -> bool {
-    const SYSTEM_PREFIXES: &[&str] = &["/dev", "/proc/", "/run/", "/var/run/", "/sys/", "/tmp/"];
-
-    SYSTEM_PREFIXES.iter()
-        .any(|prefix| path.starts_with(prefix))
-}
-
-fn dev_libc_to_kernel(dev: u64) -> u64 {
-    // The kernel internally stores the dev as: MMMmmmmm (M=major, m=minor)
-    // The libc stores the dev as mmmMMMmm (same as uapi)
-    // We normalize it to the kernel encoding
-    let major = (dev & 0xfff00) >> 8;
-    let minor = (dev & 0xff) | ((dev & !0xfffff) >> 12);
-    (major << MINORBITS) | minor
-}
-*/

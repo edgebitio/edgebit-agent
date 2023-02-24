@@ -2,31 +2,31 @@
 
 arch=$(uname -i)
 
-: "${VERSION:=0.0.8}"
-: "${EDGEBIT_URL:=https://app.edgebit.io}"
+: "${VERSION:=0.0.9}"
 : "${TARBALL_URL:=https://install.edgebit.io/edgebit-${arch}-v${VERSION}.tar.gz}"
 : "${PREFIX:=/opt}"
-
-export EDGEBIT_URL
+: "${EDGEBIT_CONFIG:=/etc/edgebit/config.yaml}"
 
 die() {
 	echo "Error: $1" >> /dev/stderr
 	exit 1
 }
 
-systemd_install() {
-	if [ "$has_systemd" -ne "1" ]; then
-		die "systemd required for persistent install"
+make_config() {
+	# only write out the config if it's not present
+	if [ ! -e "$EDGEBIT_CONFIG" ]; then
+		echo "Writing out $EDGEBIT_CONFIG"
+		cat > "$EDGEBIT_CONFIG"  <<EOF
+edgebit_id: "${EDGEBIT_ID}"
+edgebit_url: "${EDGEBIT_URL}"
+syft_config: "${PREFIX}/edgebit/data/syft.yaml"
+EOF
 	fi
+}
 
+systemd_install() {
 	echo "Installing files"
 	install "${PREFIX}/edgebit/data/edgebit-agent.service" /usr/lib/systemd/system/
-
-	mkdir -p /etc/edgebit
-	echo "EDGEBIT_ID=${EDGEBIT_ID}" > /etc/edgebit/config.env
-	echo "EDGEBIT_URL=${EDGEBIT_URL}" >> /etc/edgebit/config.env
-	echo "RUST_LOG=info" >> /etc/edgebit/config.env
-	echo "SYFT_CONFIG_FILE=${PREFIX}/edgebit/data/.syft.yaml" >> /etc/edgebit/config.env
 
 	echo "Reloading systemd"
 	systemctl daemon-reload
@@ -35,7 +35,7 @@ systemd_install() {
 	systemctl enable edgebit-agent
 
 	echo "Starting agent"
-	systemctl start edgebit-agent
+	systemctl restart edgebit-agent
 }
 
 if [ $(whoami) != "root" ]; then
@@ -44,6 +44,10 @@ fi
 
 if [ -z "$EDGEBIT_ID" ]; then
 	die "\$EDGEBIT_ID must be set"
+fi
+
+if [ -z "$EDGEBIT_URL" ]; then
+	die "\$EDGEBIT_URL must be set"
 fi
 
 if which systemctl >/dev/null; then
@@ -68,6 +72,9 @@ if [ -r "$TARBALL_URL" ]; then
 else
 	curl "$TARBALL_URL" | tar xz
 fi
+
+mkdir -p /etc/edgebit
+make_config
 
 if [ "$has_systemd" = "1" ]; then
 	systemd_install

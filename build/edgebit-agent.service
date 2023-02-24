@@ -3,7 +3,6 @@ Description=EdgeBit Agent
 
 [Service]
 ExecStart=/opt/edgebit/bin/edgebit-agent
-EnvironmentFile=/etc/edgebit/config.env
 
 [Install]
 WantedBy=multi-user.target

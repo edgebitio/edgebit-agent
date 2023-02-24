@@ -1,32 +1,27 @@
 use std::process::{Command};
 use std::path::{Path, PathBuf};
 use std::io::BufReader;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use log::*;
 use serde::Deserialize;
 use temp_file::TempFile;
 
-pub fn generate() -> Result<TempFile> {
+use crate::config::Config;
+
+pub fn generate(config: Arc<Config>) -> Result<TempFile> {
     let syft = syft_path()?;
     let tmp = TempFile::new()?;
-
-    let config = std::env::var("SYFT_CONFIG_FILE")
-        .ok();
-
     let out_path = tmp.path();
+    let syft_cfg = config.syft_config();
 
-    let mut child = Command::new(syft);
-
-    child.arg("--file")
-        .arg(out_path);
-
-    if let Some(config) = config {
-        child.arg("--config")
-            .arg(config);
-    }
-
-    let child = child.arg("/")
+    let child = Command::new(syft)
+        .arg("--file")
+        .arg(out_path)
+        .arg("--config")
+        .arg(syft_cfg)
+        .arg("/")
         .spawn()?;
 
     let out = child.wait_with_output()?;
