@@ -2,7 +2,7 @@
 
 arch=$(uname -i)
 
-: "${VERSION:=0.0.9}"
+: "${VERSION:=0.0.10}"
 : "${TARBALL_URL:=https://install.edgebit.io/edgebit-${arch}-v${VERSION}.tar.gz}"
 : "${PREFIX:=/opt}"
 : "${EDGEBIT_CONFIG:=/etc/edgebit/config.yaml}"

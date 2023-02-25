@@ -25,7 +25,7 @@ pub enum Event {
 
 struct Inner {
     config: Arc<Config>,
-    containers: DockerContainers,
+    containers: Option<DockerContainers>,
     open_monitor: OpenMonitor,
     host_workload: Mutex<HostWorkload>,
     container_workloads: Mutex<HashMap<String, ContainerWorkload>>,
@@ -42,25 +42,37 @@ impl WorkloadManager {
         let (open_tx, open_rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
         let open_monitor = OpenMonitor::start(open_tx)?;
 
-        let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
-        let containers = DockerContainers::track(cont_tx).await?;
-
         let mut host_includes = PathSet::new(PathBuf::from("/"))?;
         for path in config.host_includes() {
-            host_includes.add(&PathBuf::from(path))?;
+            // ignore the error as it's most likely from a missing path (which is ok)
+            _ = host_includes.add(&PathBuf::from(path));
         }
 
         let host_workload = HostWorkload::load(host_sbom, host_includes)?;
         host_workload.start_monitoring(&open_monitor);
 
+        let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
         let mut container_workloads = HashMap::new();
-        for (id, info) in containers.all() {
-            if let Some(rootfs) = info.rootfs {
-                let workload = ContainerWorkload::new(PathBuf::from(rootfs), &config.container_includes())?;
-                workload.start_monitoring(&open_monitor);
-                container_workloads.insert(id, workload);
+
+        let containers = match DockerContainers::track(cont_tx).await {
+            Ok(containers) => {
+                for (id, info) in containers.all() {
+                    if let Some(rootfs) = info.rootfs {
+                        let workload = ContainerWorkload::new(PathBuf::from(rootfs), &config.container_includes())?;
+                        workload.start_monitoring(&open_monitor);
+                        container_workloads.insert(id, workload);
+                    }
+                }
+
+                Some(containers)
+            },
+
+            Err(err) => {
+                // TODO: retry if docker starts up later
+                error!("Docker container tracking: {err}");
+                None
             }
-        }
+        };
 
         let inner = Arc::new(Inner{
             config,
@@ -117,8 +129,10 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
             let filepath = PathBuf::from(&filename);
             let filenames = vec![filename];
 
-            let in_use = match inner.containers.id_from_cgroup(&evt.cgroup_name) {
+            let in_use = match lookup_container_id(inner, &evt.cgroup_name) {
                 Some(id) => {
+                    debug!("Container match: {id}");
+
                     let container_workloads = inner.container_workloads.lock().unwrap();
                     if let Some(ref workload) = container_workloads.get(&id) {
                         if !workload.is_path_included(&filepath) {
@@ -197,6 +211,13 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
             _ = inner.events.send(Event::ContainerStopped(id, info)).await;
         }
     };
+}
+
+fn lookup_container_id(inner: &Inner, cgroup: &str) -> Option<String> {
+    match inner.containers {
+        Some(ref containers) => containers.id_from_cgroup(cgroup),
+        None => None,
+    }
 }
 
 pub struct HostWorkload {
@@ -288,7 +309,8 @@ impl ContainerWorkload {
     fn new(rootfs: PathBuf, includes: &[String]) -> Result<Self> {
         let mut includes_set = PathSet::new(rootfs)?;
         for path in includes {
-            includes_set.add(&PathBuf::from(path))?;
+            // ignore the error as it's most likely from a missing path (which is ok)
+            _ = includes_set.add(&PathBuf::from(path));
         }
 
         Ok(Self{

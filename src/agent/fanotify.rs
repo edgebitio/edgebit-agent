@@ -2,24 +2,29 @@ use std::os::fd::{OwnedFd, FromRawFd, AsRawFd};
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use fanotify::low_level::{FAN_NONBLOCK, FAN_MARK_ADD, FAN_MARK_REMOVE, FAN_MARK_FILESYSTEM, FAN_OPEN, AT_FDCWD, O_RDONLY};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 
 pub struct Event {
     pub mask: u64,
-    pub fd: OwnedFd,
+    pub fd: Option<OwnedFd>,
     pub pid: i32,
 }
 
 impl Event {
     pub fn path(&self) -> Result<PathBuf> {
-        let mut proc_path: PathBuf = "/proc/self/fd".into();
-        let fd = self.fd.as_raw_fd() as i32;
-        proc_path.push(fd.to_string());
+        match &self.fd {
+            Some(fd) => {
+                let mut proc_path: PathBuf = "/proc/self/fd".into();
+                let fd = fd.as_raw_fd() as i32;
+                proc_path.push(fd.to_string());
 
-        Ok(std::fs::read_link(proc_path)?)
+                Ok(std::fs::read_link(proc_path)?)
+            },
+            None => Err(anyhow!("No open file descriptor"))
+        }
     }
 }
 
@@ -72,7 +77,7 @@ impl Fanotify {
                         .map(|item| {
                             Event{
                                 mask: item.mask,
-                                fd: unsafe { OwnedFd::from_raw_fd(item.fd) },
+                                fd: owned_from_raw_fd(item.fd),
                                 pid: item.pid,
                             }
                         })
@@ -87,5 +92,13 @@ impl Fanotify {
                 Err(_) => continue,
             }
         }
+    }
+}
+
+fn owned_from_raw_fd(fd: i32) -> Option<OwnedFd> {
+    if fd < 0 {
+        None
+    } else {
+        Some(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 }

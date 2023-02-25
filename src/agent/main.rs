@@ -113,7 +113,10 @@ async fn report_in_use(client: &mut platform::Client, mut events: Receiver<Event
         match events.recv().await {
             Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
             Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
-            Some(Event::PackageInUse(id, pkgs)) => _ = client.report_in_use(id, pkgs).await,
+            Some(Event::PackageInUse(id, pkgs)) => {
+                debug!("report-in-use: [{id}]: {}: {:?}", pkgs[0].id, pkgs[0].filenames);
+                _ = client.report_in_use(id, pkgs).await
+            },
             None => break,
         }
     }
@@ -140,6 +143,9 @@ fn to_upsert_workload_req(workload: &HostWorkload) -> pb::UpsertWorkloadRequest 
 }
 
 async fn handle_container_started(client: &mut platform::Client, id: String, info: ContainerInfo) {
+    info!("Registering container started: {id}");
+    debug!("Container info: {info:?}");
+
     _ = client.upsert_workload(pb::UpsertWorkloadRequest{
             workload_id: id,
             workload: Some(pb::Workload{
@@ -160,6 +166,8 @@ async fn handle_container_started(client: &mut platform::Client, id: String, inf
 }
 
 async fn handle_container_stopped(client: &mut platform::Client, id: String, info: ContainerInfo) {
+    info!("Registering container stopped: {id}");
+
     _ = client.upsert_workload(pb::UpsertWorkloadRequest{
         workload_id: id,
         end_time: info.end_time.map(|t| t.into()),

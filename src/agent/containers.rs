@@ -23,7 +23,7 @@ lazy_static! {
     // It will be one of two patterns:
     // "/docker/<container_id>"
     // "docker-<container_id>.scope"
-    static ref CGROUP_NAME_RE: Regex = Regex::new(r".*docker.([[:xdigit:]]{64})(?:\.scope)?").unwrap();
+    static ref CGROUP_NAME_RE: Regex = Regex::new(r".*([[:xdigit:]]{64})").unwrap();
 
     static ref DT_UNIX_EPOCH: DateTime<FixedOffset> = DateTime::parse_from_rfc3339("1970-01-01T00:00:00-00:00").unwrap();
 }

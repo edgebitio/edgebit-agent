@@ -1,7 +1,6 @@
 use std::time::Duration;
 use std::path::Path;
-use std::ffi::{OsStr, OsString};
-use std::os::fd::AsRawFd;
+use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
@@ -217,8 +216,7 @@ async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
             let filename = match e.path() {
                 Ok(path) => path.into_os_string(),
                 Err(err) => {
-                    let fd = e.fd.as_raw_fd() as i32;
-                    error!("failed to turn FD={fd} into a path: {err}");
+                    error!("Failed to extract file path: {err}");
                     continue;
                 }
             };

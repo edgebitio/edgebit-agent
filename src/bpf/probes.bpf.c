@@ -102,7 +102,9 @@ static struct file* get_file(int fd) {
 
 static int fill_cgroup_name(char *buf, size_t buf_len) {
     struct task_struct *current = (struct task_struct*) bpf_get_current_task();
-    const char *name = BPF_CORE_READ(current, cgroups, dfl_cgrp, kn, name);
+    struct cgroup_subsys_state **subsys_arr = BPF_CORE_READ(current, cgroups, subsys);
+    struct cgroup_subsys_state *subsys = subsys_arr[0];
+    const char *name = BPF_CORE_READ(subsys, cgroup, kn, name);
 
     if (name) {
         if (bpf_probe_read_kernel_str(buf, buf_len, name) < 0) {
