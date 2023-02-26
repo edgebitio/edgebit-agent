@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 use std::time::{SystemTime, Duration};
 
-use anyhow::{Result};
+use anyhow::{Result, anyhow};
 use log::*;
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
@@ -16,13 +16,11 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use chrono::{DateTime, offset::Utc, offset::FixedOffset};
 
-const DOCKER_HOST: &str = "unix:///var/run/docker.sock";
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay2";
+const DOCKER_CONNECT_TIMEOUT: u64 = 5;
 
 lazy_static! {
-    // It will be one of two patterns:
-    // "/docker/<container_id>"
-    // "docker-<container_id>.scope"
+    // Docker containers will contain the id somewhere in the cgroup name
     static ref CGROUP_NAME_RE: Regex = Regex::new(r".*([[:xdigit:]]{64})").unwrap();
 
     static ref DT_UNIX_EPOCH: DateTime<FixedOffset> = DateTime::parse_from_rfc3339("1970-01-01T00:00:00-00:00").unwrap();
@@ -46,48 +44,20 @@ pub enum ContainerEvent {
 pub type ContainerMap = HashMap<String, ContainerInfo>;
 
 pub struct DockerContainers {
-    docker: Arc<Docker>,
     cont_map: Arc<Mutex<ContainerMap>>,
-    events_task: JoinHandle<()>,
+    task: JoinHandle<()>,
 }
 
 impl DockerContainers {
-    pub async fn track(ch: Sender<ContainerEvent>) -> Result<Self> {
-        let docker = Arc::new(
-            Docker::connect_with_unix(
-                DOCKER_HOST,
-                5,
-                bollard::API_DEFAULT_VERSION
-            )?
-        );
-
-        let opts = EventsOptions {
-            since: None,
-            until: None,
-            filters: [
-                ("event", vec!["start", "die"]),
-            ].into(),
-        };
-
-        let stream = docker.events(Some(opts));
-
+    pub fn track(host: String, ch: Sender<ContainerEvent>) -> Self {
         let cont_map = Arc::new(Mutex::new(ContainerMap::new()));
 
-        let events_task = tokio::task::spawn(
-            stream_events(docker.clone(), cont_map.clone(), stream, ch.clone())
-        );
+        let task = tokio::task::spawn(run(host, cont_map.clone(), ch));
 
-        // Load already running containers
-        load_running(&docker, cont_map.clone()).await?;
-
-        // Emit ContainerEvent::Started event for the running containers
-        emit_existing(cont_map.clone(), ch).await;
-
-        Ok(Self {
-            docker,
+        Self {
             cont_map,
-            events_task,
-        })
+            task,
+        }
     }
 
     pub fn id_from_cgroup(&self, cgroup: &str) -> Option<String> {
@@ -107,6 +77,32 @@ impl DockerContainers {
             .unwrap()
             .clone()
     }
+}
+
+async fn connect_with_retry(host: &str) -> Result<Docker> {
+    let docker = docker_connection(host)?;
+
+    let mut quiet = false;
+    loop {
+        match docker.ping().await {
+            Ok(_) => {
+                info!("Connected to Docker daemon");
+                break;
+            },
+            Err(err) => {
+                if quiet {
+                    debug!("Failed to connect to Docker daemon: {err}");
+                } else {
+                    error!("Failed to connect to Docker daemon: {err}");
+                    quiet = true;
+                }
+
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+
+    Ok(docker)
 }
 
 async fn stream_events(
@@ -184,9 +180,6 @@ async fn load_running(docker: &Docker, cont_map: Arc<Mutex<ContainerMap>>) -> Re
 
     let conts = docker.list_containers(Some(opts)).await?;
 
-    let mut cont_map = cont_map.lock().unwrap();
-    let cont_map: &mut ContainerMap = &mut cont_map;
-
     for c in conts {
         if c.id.is_none() {
             continue;
@@ -196,7 +189,7 @@ async fn load_running(docker: &Docker, cont_map: Arc<Mutex<ContainerMap>>) -> Re
         match inspect_container(docker, &id).await {
             Ok(info) => {
                 debug!("Container {id}: {info:?}");
-                cont_map.insert(id, info);
+                cont_map.lock().unwrap().insert(id, info);
             },
             Err(err) => {
                 error!("Docker inspect_container({id}): {err}");
@@ -263,8 +256,16 @@ async fn inspect_container(docker: &Docker, id: &str) -> Result<ContainerInfo> {
 }
 
 async fn emit_existing(cont_map: Arc<Mutex<ContainerMap>>, ch: Sender<ContainerEvent>) {
-    for (id, info) in cont_map.lock().unwrap().iter() {
-        _ = ch.send(ContainerEvent::Started(id.clone(), info.clone())).await;
+    let events: Vec<_> = cont_map.lock()
+        .unwrap()
+        .iter()
+        .map(|(id, info)| ContainerEvent::Started(id.clone(), info.clone()))
+        .collect();
+
+    for ev in events {
+        if let Err(err) = ch.send(ev).await {
+            error!("Failed to send events on a channel: {err}");
+        }
     }
 }
 
@@ -279,4 +280,56 @@ fn head<T: Clone>(v: &[T]) -> Option<T> {
 fn systime_from_secs(secs: i64) -> SystemTime {
     let dur = Duration::from_secs(secs as u64);
     UNIX_EPOCH + dur
+}
+
+async fn run(host: String, cont_map: Arc<Mutex<ContainerMap>>, ch: Sender<ContainerEvent>) {
+    loop {
+        match connect_with_retry(&host).await {
+            Ok(docker) => {
+                if let Err(err) = monitor_containers(docker, cont_map.clone(), ch.clone()).await {
+                    error!("Container monitoring: {err}");
+                }
+            },
+
+            Err(err) => error!("Failed to join connect_with_retry: {err}"),
+        }
+    }
+}
+
+fn docker_connection(host: &str) -> Result<Docker> {
+    if host.starts_with("tcp://") || host.starts_with("http://") {
+        Ok(Docker::connect_with_http(host, DOCKER_CONNECT_TIMEOUT, bollard::API_DEFAULT_VERSION)?)
+    } else if host.starts_with("unix://") {
+        Ok(Docker::connect_with_unix(host, DOCKER_CONNECT_TIMEOUT, bollard::API_DEFAULT_VERSION)?)
+    } else {
+        Err(anyhow!("Unsupported Docker host scheme: {host}"))
+    }
+}
+
+async fn monitor_containers(docker: Docker, cont_map: Arc<Mutex<ContainerMap>>, ch: Sender<ContainerEvent>) -> Result<()> {
+    let opts = EventsOptions {
+        since: None,
+        until: None,
+        filters: [
+            ("event", vec!["start", "die"]),
+        ].into(),
+    };
+
+    let docker = Arc::new(docker);
+
+    let stream = docker.events(Some(opts));
+
+    let events_task = tokio::task::spawn(
+        stream_events(docker.clone(), cont_map.clone(), stream, ch.clone())
+    );
+
+    // Load already running containers
+    load_running(&docker, cont_map.clone()).await?;
+
+    // Emit ContainerEvent::Started event for the running containers
+    emit_existing(cont_map.clone(), ch).await;
+
+    _ = events_task.await;
+
+    Ok(())
 }

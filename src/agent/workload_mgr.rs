@@ -25,7 +25,7 @@ pub enum Event {
 
 struct Inner {
     config: Arc<Config>,
-    containers: Option<DockerContainers>,
+    containers: DockerContainers,
     open_monitor: OpenMonitor,
     host_workload: Mutex<HostWorkload>,
     container_workloads: Mutex<HashMap<String, ContainerWorkload>>,
@@ -52,34 +52,14 @@ impl WorkloadManager {
         host_workload.start_monitoring(&open_monitor);
 
         let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
-        let mut container_workloads = HashMap::new();
-
-        let containers = match DockerContainers::track(cont_tx).await {
-            Ok(containers) => {
-                for (id, info) in containers.all() {
-                    if let Some(rootfs) = info.rootfs {
-                        let workload = ContainerWorkload::new(PathBuf::from(rootfs), &config.container_includes())?;
-                        workload.start_monitoring(&open_monitor);
-                        container_workloads.insert(id, workload);
-                    }
-                }
-
-                Some(containers)
-            },
-
-            Err(err) => {
-                // TODO: retry if docker starts up later
-                error!("Docker container tracking: {err}");
-                None
-            }
-        };
+        let containers = DockerContainers::track(config.docker_host(), cont_tx);
 
         let inner = Arc::new(Inner{
             config,
             containers,
             open_monitor,
             host_workload: Mutex::new(host_workload),
-            container_workloads: Mutex::new(container_workloads),
+            container_workloads: Mutex::new(HashMap::new()),
             events,
         });
 
@@ -129,7 +109,7 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
             let filepath = PathBuf::from(&filename);
             let filenames = vec![filename];
 
-            let in_use = match lookup_container_id(inner, &evt.cgroup_name) {
+            let in_use = match inner.containers.id_from_cgroup(&evt.cgroup_name) {
                 Some(id) => {
                     debug!("Container match: {id}");
 
@@ -166,7 +146,9 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
                 }
             };
 
-            _ = inner.events.send(in_use).await;
+            if let Err(err) = inner.events.send(in_use).await {
+                error!("failed to send events on a channel: {err}");
+            }
         },
 
         Err(name) => {
@@ -195,11 +177,13 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
                 None => error!("Container {id} started but rootfs missing"),
             }
 
-            _ = inner.events.send(Event::ContainerStarted(id, info)).await;
+            if let Err(err) = inner.events.send(Event::ContainerStarted(id, info)).await {
+                error!("failed to send events on a channel: {err}");
+            }
         },
         ContainerEvent::Stopped(id, info) => {
             match &info.rootfs {
-                Some(rootfs) => {
+                Some(_) => {
                     let mut container_workloads = inner.container_workloads.lock().unwrap();
                     if let Some(workload) = container_workloads.remove(&id) {
                         workload.stop_monitoring(&inner.open_monitor);
@@ -208,16 +192,11 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
                 None => error!("Container {id} stopped but rootfs missing"),
             }
 
-            _ = inner.events.send(Event::ContainerStopped(id, info)).await;
+            if let Err(err) = inner.events.send(Event::ContainerStopped(id, info)).await {
+                error!("failed to send events on a channel: {err}");
+            }
         }
     };
-}
-
-fn lookup_container_id(inner: &Inner, cgroup: &str) -> Option<String> {
-    match inner.containers {
-        Some(ref containers) => containers.id_from_cgroup(cgroup),
-        None => None,
-    }
 }
 
 pub struct HostWorkload {

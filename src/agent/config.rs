@@ -7,6 +7,8 @@ pub const CONFIG_PATH: &str = "/etc/edgebit/config.yaml";
 
 const DEFAULT_EDGEBIT_URL: &str = "https://agents.edgebit.io";
 const DEFAULT_LOG_LEVEL: &str = "info";
+const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
+
 static DEFAULT_INCLUDES: &[&str] = &["/bin", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/sbin", "/usr"];
 
 #[derive(Deserialize)]
@@ -25,6 +27,8 @@ struct Inner {
     syft_config: String,
 
     syft_path: PathBuf,
+
+    docker_socket: Option<String>,
 }
 
 pub struct Config {
@@ -98,5 +102,12 @@ impl Config {
 
     pub fn syft_path(&self) -> PathBuf {
         self.inner.syft_path.clone()
+    }
+
+    pub fn docker_host(&self) -> String {
+        self.inner.docker_socket
+            .clone()
+            .or_else(|| std::env::var("DOCKER_HOST").ok())
+            .unwrap_or(DEFAULT_DOCKER_HOST.to_string())
     }
 }

@@ -1,6 +1,5 @@
 [Unit]
 Description=EdgeBit Agent
-After=docker.service
 
 [Service]
 ExecStart=/opt/edgebit/edgebit-agent

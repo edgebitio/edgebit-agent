@@ -116,7 +116,9 @@ async fn report_in_use(client: &mut platform::Client, mut events: Receiver<Event
             Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
             Some(Event::PackageInUse(id, pkgs)) => {
                 debug!("report-in-use: [{id}]: {}: {:?}", pkgs[0].id, pkgs[0].filenames);
-                _ = client.report_in_use(id, pkgs).await
+                if let Err(err) = client.report_in_use(id, pkgs).await {
+                    error!("Failed to report-in-use: {err}");
+                }
             },
             None => break,
         }
@@ -147,7 +149,7 @@ async fn handle_container_started(client: &mut platform::Client, id: String, inf
     info!("Registering container started: {id}");
     debug!("Container info: {info:?}");
 
-    _ = client.upsert_workload(pb::UpsertWorkloadRequest{
+    let res = client.upsert_workload(pb::UpsertWorkloadRequest{
             workload_id: id,
             workload: Some(pb::Workload{
                 group: Vec::new(),
@@ -164,16 +166,24 @@ async fn handle_container_started(client: &mut platform::Client, id: String, inf
                 })),
             }),
     }).await;
+
+    if let Err(err) = res {
+        error!("Failed to register container started: {err}");
+    }
 }
 
 async fn handle_container_stopped(client: &mut platform::Client, id: String, info: ContainerInfo) {
     info!("Registering container stopped: {id}");
 
-    _ = client.upsert_workload(pb::UpsertWorkloadRequest{
+    let res = client.upsert_workload(pb::UpsertWorkloadRequest{
         workload_id: id,
         end_time: info.end_time.map(|t| t.into()),
         ..Default::default()
     }).await;
+
+    if let Err(err) = res {
+        error!("Failed to register container stopped: {err}");
+    }
 }
 
 async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: String) -> Result<()> {
