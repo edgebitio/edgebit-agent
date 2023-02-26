@@ -1,0 +1,47 @@
+# nfpm example configuration file
+#
+# check https://nfpm.goreleaser.com/configuration for detailed usage
+#
+name: "edgebit-agent"
+arch: "amd64"
+platform: "linux"
+version: ${VERSION}
+section: "default"
+priority: "extra"
+provides:
+  - edgebit-agent
+depends:
+
+maintainer: "EdgeBit, Inc"
+
+description: |
+  EdgeBit Agent compiles a realtime SBOM of the running workloads.
+
+vendor: "EdgeBit"
+homepage: "https://edgebit.io"
+license: "Apache2"
+
+contents:
+  - src: ../target/x86_64-unknown-linux-musl/release/edgebit-agent
+    dst: /opt/edgebit/edgebit-agent
+
+  - src: syft/
+    dst: /opt/edgebit/syft
+
+  - src: syft.yaml
+    dst: /etc/edgebit/syft.yaml
+
+  - src: config.yaml
+    dst: /etc/edgebit/config.yaml
+    type: config|noreplace
+
+  - src: edgebit-agent.service
+    dst: /usr/lib/systemd/system/
+
+overrides:
+  rpm:
+    scripts:
+      postinstall: ./scripts/postinstall.sh
+  deb:
+    scripts:
+      postinstall: ./scripts/postinstall.sh

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -23,6 +23,8 @@ struct Inner {
     container_includes: Option<Vec<String>>,
 
     syft_config: String,
+
+    syft_path: PathBuf,
 }
 
 pub struct Config {
@@ -91,5 +93,10 @@ impl Config {
 
     pub fn syft_config(&self) -> String {
         self.inner.syft_config.clone()
+    }
+
+
+    pub fn syft_path(&self) -> PathBuf {
+        self.inner.syft_path.clone()
     }
 }

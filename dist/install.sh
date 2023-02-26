@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh -ex
 
 arch=$(uname -i)
 
@@ -19,14 +19,15 @@ make_config() {
 		cat > "$EDGEBIT_CONFIG"  <<EOF
 edgebit_id: "${EDGEBIT_ID}"
 edgebit_url: "${EDGEBIT_URL}"
-syft_config: "${PREFIX}/edgebit/data/syft.yaml"
+syft_config: "${PREFIX}/edgebit/syft.yaml"
+syft_path: "${PREFIX}/edgebit/syft/syft"
 EOF
 	fi
 }
 
 systemd_install() {
 	echo "Installing files"
-	install "${PREFIX}/edgebit/data/edgebit-agent.service" /usr/lib/systemd/system/
+	install "${PREFIX}/edgebit/edgebit-agent.service" /usr/lib/systemd/system/
 
 	echo "Reloading systemd"
 	systemctl daemon-reload
@@ -67,7 +68,7 @@ cd "$PREFIX"
 
 # Download agent and syft
 echo "Downloading and extracting agent"
-if [ -r "$TARBALL_URL" ]; then
+if [ -f "$TARBALL_URL" ]; then
 	tar xzf "$TARBALL_URL"
 else
 	curl "$TARBALL_URL" | tar xz
@@ -83,5 +84,5 @@ if [ "$has_systemd" = "1" ]; then
 	echo "was enabled with systemd to start on boot"
 else
 	echo "EdgeBit agent was installed into $PREFIX/edgebit. To start it, run:"
-	echo "$PREFIX/edgebit/bin/edgebit-agent"
+	echo "$PREFIX/edgebit/edgebit-agent"
 fi

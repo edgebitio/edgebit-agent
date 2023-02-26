@@ -11,7 +11,7 @@ use temp_file::TempFile;
 use crate::config::Config;
 
 pub fn generate(config: Arc<Config>) -> Result<TempFile> {
-    let syft = syft_path()?;
+    let syft = config.syft_path();
     let tmp = TempFile::new()?;
     let out_path = tmp.path();
     let syft_cfg = config.syft_config();
@@ -176,26 +176,4 @@ fn normalize(path: PathBuf) -> String {
 
     path.to_string_lossy()
         .into_owned()
-}
-
-fn syft_path() -> Result<PathBuf> {
-    if let Ok(syft) = std::env::var("SYFT_PATH") {
-        return Ok(PathBuf::from(syft));
-    }
-
-    let arg0: PathBuf = std::env::args()
-        .next()
-        .expect("program started without argv[0]")
-        .into();
-
-    let my_dir = arg0.parent()
-        .expect("argv[0] is empty");
-
-    let syft = my_dir.join("syft");
-
-    if syft.is_file() || syft.is_symlink() {
-        Ok(syft)
-    } else {
-        Err(anyhow!("'syft' not found. Set SYFT_PATH env var with /path/to/syft"))
-    }
 }

@@ -1,0 +1,9 @@
+# Set your EDGEBIT_ID (Enrollment token)
+edgebit_id: YOUR EDGEBIT_ID
+
+# Replace YOUR_ORG with the organization associated with your account
+edgebit_url: "https://YOUR_ORG.edgebit.io"
+
+syft_config: "/etc/edgebit/syft.yaml"
+
+syft_path: "/opt/edgebit/syft/syft"

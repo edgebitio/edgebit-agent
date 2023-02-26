@@ -1,0 +1,16 @@
+output: json
+
+check-for-app-update: false
+
+catalogers:
+  - dpkgdb
+  - dpkg-db
+  - rpmdb
+  - rpm-db
+  - python-index
+  - python-package
+
+exclude:
+  - ./snap
+  - ./var/lib/docker
+  - ./var/lib/containerd

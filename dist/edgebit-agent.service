@@ -1,8 +1,9 @@
 [Unit]
 Description=EdgeBit Agent
+After=docker.service
 
 [Service]
-ExecStart=/opt/edgebit/bin/edgebit-agent
+ExecStart=/opt/edgebit/edgebit-agent
 
 [Install]
 WantedBy=multi-user.target
