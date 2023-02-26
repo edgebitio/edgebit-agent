@@ -23,6 +23,7 @@ use pb::token_service_client::TokenServiceClient;
 use pb::inventory_service_client::InventoryServiceClient;
 
 use crate::registry::PkgRef;
+use crate::version::VERSION;
 
 const TOKEN_FILE: &str = "/var/lib/edgebit/token";
 const EXPIRATION_SLACK: Duration = Duration::from_secs(60);
@@ -203,6 +204,7 @@ impl SessionKeeper {
             Ok(refresh_token) => {
                 let req = pb::GetSessionTokenRequest{
                     refresh_token: refresh_token.get(),
+                    agent_version: VERSION.to_string(),
                 };
 
                 let resp = token_svc.get_session_token(req).await?
@@ -214,6 +216,7 @@ impl SessionKeeper {
                 let req = pb::EnrollAgentRequest{
                     deployment_token: deploy_token,
                     hostname: hostname(),
+                    agent_version: VERSION.to_string(),
                 };
 
                 let resp = token_svc.enroll_agent(req)
@@ -265,6 +268,7 @@ impl SessionKeeper {
 
             let req = pb::GetSessionTokenRequest{
                 refresh_token: self.refresh_token.get(),
+                agent_version: VERSION.to_string(),
             };
 
             expiration = match token_svc.get_session_token(req).await {

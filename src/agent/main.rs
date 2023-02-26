@@ -6,6 +6,7 @@ pub mod registry;
 pub mod containers;
 pub mod fanotify;
 pub mod workload_mgr;
+pub mod version;
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -21,6 +22,7 @@ use sbom::Sbom;
 use platform::pb;
 use containers::ContainerInfo;
 use workload_mgr::{WorkloadManager, Event, HostWorkload};
+use version::VERSION;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -58,8 +60,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     std::env::set_var("RUST_LOG", config.log_level());
     pretty_env_logger::init();
 
-    let version = env!("CARGO_PKG_VERSION");
-    info!("EdgeBit Agent v{version}");
+    info!("EdgeBit Agent v{VERSION}");
 
     let url = config.edgebit_url();
     let token = config.edgebit_id();

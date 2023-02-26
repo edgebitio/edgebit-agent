@@ -13,7 +13,7 @@ mkdir -p "$stage/bin"
 mkdir -p "$stage/data"
 
 cp ../target/x86_64-unknown-linux-musl/release/edgebit-agent "$stage/bin"
-cp "$(which syft)" "$stage/bin"
+cp syft/* "$stage/bin"
 cp syft.yaml "$stage/data"
 cp edgebit-agent.service "$stage/data"
 
