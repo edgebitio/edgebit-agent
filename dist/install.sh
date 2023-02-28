@@ -1,9 +1,9 @@
-#!/bin/sh -ex
+#!/bin/sh -e
 
-arch=$(uname -i)
+arch=$(uname -m)
 
-: "${VERSION:=0.0.10}"
-: "${TARBALL_URL:=https://install.edgebit.io/edgebit-${arch}-v${VERSION}.tar.gz}"
+: "${VERSION:=0.0.11}"
+: "${TARBALL_URL:=https://install.edgebit.io/edgebit-agent-${VERSION}.${arch}.tar.gz}"
 : "${PREFIX:=/opt}"
 : "${EDGEBIT_CONFIG:=/etc/edgebit/config.yaml}"
 
@@ -27,7 +27,17 @@ EOF
 
 systemd_install() {
 	echo "Installing files"
-	install "${PREFIX}/edgebit/edgebit-agent.service" /usr/lib/systemd/system/
+
+	unit_src="${PREFIX}/edgebit/edgebit-agent.service"
+	unit_dst=/usr/lib/systemd/system/
+	unit_dst2=/etc/systemd/system/
+
+	if ! install "$unit_src" "$unit_dst" 2>/dev/null; then
+		echo "Could not install Systemd unit to $unit_dst, trying $unit_dst2"
+		# if it failed to install, it's probably because /usr is read-only.
+		# fall back to /etc
+		install "$unit_src" "$unit_dst2"
+	fi
 
 	echo "Reloading systemd"
 	systemctl daemon-reload
@@ -71,7 +81,7 @@ echo "Downloading and extracting agent"
 if [ -f "$TARBALL_URL" ]; then
 	tar xzf "$TARBALL_URL"
 else
-	curl "$TARBALL_URL" | tar xz
+	curl -s "$TARBALL_URL" | tar xz
 fi
 
 mkdir -p /etc/edgebit

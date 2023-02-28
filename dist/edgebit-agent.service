@@ -3,6 +3,7 @@ Description=EdgeBit Agent
 
 [Service]
 ExecStart=/opt/edgebit/edgebit-agent
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
