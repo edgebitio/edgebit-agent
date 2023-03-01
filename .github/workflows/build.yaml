@@ -1,0 +1,24 @@
+name: Build
+
+on:
+  push:
+    on: [push, pull_request_target]
+
+jobs:
+  build-binaries:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Building builder image
+        shell: bash
+        run: |
+          cd build
+          docker build -t agent-builder .
+
+      - name: Building agent
+        shell: bash
+        run: |
+          git submodule update --init
+          docker run --rm -v "$(pwd)":/home/rust/src agent-builder cargo build --target-dir /home/rust/target

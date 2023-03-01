@@ -1,6 +1,3 @@
 [submodule "edgebitapis"]
 	path = edgebitapis
-	url = git@github.com:edgebitio/edgebitapis.git
-[submodule "edgebitapis/"]
-	url = git@github.com:eyakubovich/edgebitapis.git
-	branch = ey/use-syft-sbom
+	url = https://github.com/edgebitio/edgebitapis.git
