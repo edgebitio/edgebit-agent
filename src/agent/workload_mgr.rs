@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::time::{Instant, Duration};
 
 use anyhow::{Result, anyhow};
 use log::*;
@@ -17,10 +18,17 @@ use crate::sbom::Sbom;
 
 const BASEOS_ID_PATH: &str = "/var/lib/edgebit/baseos-id";
 
+const OPEN_EVENT_LAG: Duration = Duration::from_secs(5);
+
 pub enum Event {
     ContainerStarted(String, ContainerInfo),
     ContainerStopped(String, ContainerInfo),
     PackageInUse(String, Vec<PkgRef>),
+}
+
+struct OpenEventQueueItem {
+    timestamp: Instant,
+    evt: OpenEvent,
 }
 
 struct Inner {
@@ -30,11 +38,13 @@ struct Inner {
     host_workload: Mutex<HostWorkload>,
     container_workloads: Mutex<HashMap<String, ContainerWorkload>>,
     events: Sender<Event>,
+    open_event_q: Mutex<VecDeque<OpenEventQueueItem>>,
 }
 
 pub struct WorkloadManager {
     inner: Arc<Inner>,
     run_task: JoinHandle<()>,
+    open_event_task: JoinHandle<()>,
 }
 
 impl WorkloadManager {
@@ -61,15 +71,21 @@ impl WorkloadManager {
             host_workload: Mutex::new(host_workload),
             container_workloads: Mutex::new(HashMap::new()),
             events,
+            open_event_q: Mutex::new(VecDeque::new()),
         });
 
         let run_task = tokio::task::spawn(
             run(inner.clone(), open_rx, cont_rx)
         );
 
+        let open_event_task = tokio::task::spawn(
+            service_open_event_queue(inner.clone())
+        );
+
         Ok(Self{
             inner,
             run_task,
+            open_event_task,
         })
     }
 
@@ -88,7 +104,7 @@ async fn run(inner: Arc<Inner>, mut open_rx: Receiver<OpenEvent>, mut cont_rx: R
         tokio::select!{
             evt = open_rx.recv() => {
                 match evt {
-                    Some(evt) => handle_open_event(&inner, evt).await,
+                    Some(evt) => queue_open_event(&inner, evt),
                     None => break,
                 }
             },
@@ -102,14 +118,47 @@ async fn run(inner: Arc<Inner>, mut open_rx: Receiver<OpenEvent>, mut cont_rx: R
     }
 }
 
+fn queue_open_event(inner: &Inner, evt: OpenEvent) {
+    inner.open_event_q.lock()
+        .unwrap()
+        .push_back(OpenEventQueueItem{
+                timestamp: Instant::now(),
+                evt,
+            });
+}
+
+fn pop_open_event(inner: &Inner) -> Option<OpenEventQueueItem> {
+    inner.open_event_q.lock().unwrap().pop_front()
+}
+
+async fn service_open_event_queue(inner: Arc<Inner>) {
+    loop {
+        let cutoff = Instant::now()
+            .checked_sub(OPEN_EVENT_LAG)
+            .unwrap();
+
+        while let Some(item) = pop_open_event(&inner) {
+            if item.timestamp > cutoff {
+                break;
+            }
+
+            handle_open_event(&inner, item.evt).await;
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
     match evt.filename.into_string() {
         Ok(filename) => {
-            debug!("[{}]: {filename}", evt.cgroup_name);
+            let cgroup = evt.cgroup_name.unwrap_or(String::new());
+            debug!("[{cgroup}]: {filename}");
+
             let filepath = PathBuf::from(&filename);
             let filenames = vec![filename];
 
-            let in_use = match inner.containers.id_from_cgroup(&evt.cgroup_name) {
+            let in_use = match inner.containers.id_from_cgroup(&cgroup) {
                 Some(id) => {
                     debug!("Container match: {id}");
 

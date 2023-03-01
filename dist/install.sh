@@ -49,6 +49,10 @@ systemd_install() {
 	systemctl restart edgebit-agent
 }
 
+if [ "$arch" != "x86_64" ]; then
+	die "Only x86_64 is supported at this time"
+fi
+
 if [ $(whoami) != "root" ]; then
 	die "Please run as root"
 fi

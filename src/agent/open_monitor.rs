@@ -2,6 +2,7 @@ use std::time::Duration;
 use std::path::Path;
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
+use std::ffi::CStr;
 
 use anyhow::{Result, anyhow};
 use tokio::sync::mpsc::Sender;
@@ -15,6 +16,7 @@ mod probes {
     include!(concat!(env!("OUT_DIR"), "/probes.skel.rs"));
 }
 
+const OPEN_EVENTS_BUF_SIZE: usize = 32;
 const ZOMBIE_EVENTS_BUF_SIZE: usize = 4;
 
 #[derive(Clone)]
@@ -73,7 +75,7 @@ impl BpfProbes {
     where F: Send + Sync + Fn(&[u8]) -> () + 'static
     {
         let cb = Box::new(move |_cpu, buf: &[u8]| {
-           callback(buf) 
+           callback(buf)
         });
 
         let skel = self.skel.clone();
@@ -85,6 +87,37 @@ impl BpfProbes {
 
                 match PerfBufferBuilder::new(maps.zombie_events())
                     .pages(ZOMBIE_EVENTS_BUF_SIZE)
+                    .sample_cb(cb)
+                    .lost_cb(handle_lost_events)
+                    .build() {
+
+                    Ok(zombies) => zombies,
+                    Err(err) => return Err(anyhow::Error::from(err))
+                }
+            };
+
+            loop {
+                _ = zombies.poll(Duration::from_millis(100));
+            }
+        })
+    }
+
+    fn watch_opens<F>(&self, callback: F) -> JoinHandle<Result<()>>
+    where F: Send + Sync + Fn(&[u8]) -> () + 'static
+    {
+        let cb = Box::new(move |_cpu, buf: &[u8]| {
+           callback(buf)
+        });
+
+        let skel = self.skel.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let zombies = {
+                let skel = skel.lock().unwrap();
+                let maps = skel.maps();
+
+                match PerfBufferBuilder::new(maps.open_events())
+                    .pages(OPEN_EVENTS_BUF_SIZE)
                     .sample_cb(cb)
                     .lost_cb(handle_lost_events)
                     .build() {
@@ -140,6 +173,7 @@ pub struct OpenMonitor {
     fan_task: JoinHandle<()>,
     probes: BpfProbes,
     zombie_task: JoinHandle<Result<()>>,
+    opens_task: JoinHandle<Result<()>>,
 }
 
 impl OpenMonitor {
@@ -148,8 +182,10 @@ impl OpenMonitor {
         let probes = BpfProbes::load()?;
 
         let fan_task = tokio::task::spawn(
-            monitor(fan.clone(), probes.clone(), ch)
+            monitor(fan.clone(), probes.clone(), ch.clone())
         );
+
+        let opens_task = monitor_bpf_open_events(probes.clone(), ch);
 
         // Watch for processes to exit and schedule their process info to be cleaned up
         // a few seconds after
@@ -174,6 +210,7 @@ impl OpenMonitor {
             fan_task,
             probes,
             zombie_task,
+            opens_task,
         })
     }
 
@@ -221,17 +258,16 @@ async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
                 }
             };
 
-            let cgroup = match probes.lookup_cgroup(e.pid as u32) {
-                Ok(Some(cgroup)) => cgroup,
-                Ok(None) => String::new(),
+            let cgroup_name = match probes.lookup_cgroup(e.pid as u32) {
+                Ok(cgroup) => cgroup,
                 Err(err) =>  {
                     error!("lookup_cgroup: {err}");
-                    String::new()
+                    None
                 }
             };
 
             let open = OpenEvent {
-                cgroup_name: cgroup,
+                cgroup_name,
                 filename,
             };
 
@@ -240,21 +276,44 @@ async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
     }
 }
 
-/*
-fn pid_from_bytes(bytes: &[u8]) -> Result<u32> {
-    if bytes.len() < sizeof(u32) {
-        return Err(anyhow!("truncated PID"));
-    }
+fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHandle<Result<()>> {
+    let probes2 = probes.clone();
 
-    let buf = [0u8; 4];
-    buf.copy_from_slice(src);
+    probes.watch_opens(move |buf| {
+        let evt = buf.as_ptr() as *const EvtOpen;
+        let fname = unsafe { CStr::from_ptr(&((*evt).filename) as *const i8) };
+        let pid = unsafe { u32::from_ne_bytes((*evt).pid) };
 
-    Ok(u32::from_ne_bytes(buf))
+        let filename = match fname.to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let cgroup_name = match probes2.lookup_cgroup(pid) {
+            Ok(cgroup) => cgroup,
+            Err(err) =>  {
+                error!("lookup_cgroup: {err}");
+                None
+            }
+        };
+
+        let open = OpenEvent {
+            cgroup_name,
+            filename: filename.into(),
+        };
+
+        _ = ch.blocking_send(open);
+    })
 }
-*/
+
+// matches evt_open in probes.bpf.c
+#[repr(C)]
+struct EvtOpen {
+    pid: [u8; 4],
+    filename: [std::ffi::c_char; 128],
+}
 
 pub struct OpenEvent {
-    //pub cgroup: u64,
-    pub cgroup_name: String,
+    pub cgroup_name: Option<String>,
     pub filename: OsString,
 }
