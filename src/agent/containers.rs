@@ -18,6 +18,7 @@ use chrono::{DateTime, offset::Utc, offset::FixedOffset};
 
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay2";
 const DOCKER_CONNECT_TIMEOUT: u64 = 5;
+const CONTAINER_CLEANUP_LAG: Duration = Duration::from_secs(10);
 
 lazy_static! {
     // Docker containers will contain the id somewhere in the cgroup name
@@ -115,7 +116,7 @@ async fn stream_events(
         debug!("Docker event: {evt:?}");
 
         match evt {
-            Ok(msg) => process_event(&docker, &cont_map, msg, &ch).await,
+            Ok(msg) => process_event(&docker, cont_map.clone(), msg, &ch).await,
             Err(err) => error!("failed to receive docker event: {err}"),
         }
     }
@@ -123,7 +124,7 @@ async fn stream_events(
     debug!("Docker event streaming done");
 }
 
-async fn process_event(docker: &Docker, cont_map: &Mutex<ContainerMap>, msg: EventMessage, ch: &Sender<ContainerEvent>) {
+async fn process_event(docker: &Docker, cont_map: Arc<Mutex<ContainerMap>>, msg: EventMessage, ch: &Sender<ContainerEvent>) {
     if msg.typ == Some(EventMessageTypeEnum::CONTAINER) {
         if let Some(action) = msg.action {
             if let Some(actor) = msg.actor {
@@ -153,14 +154,27 @@ async fn process_event(docker: &Docker, cont_map: &Mutex<ContainerMap>, msg: Eve
 
                         // TODO: it's racy to rely on the cont_map to have the info since
                         // if this is called before load_running, it may not be there.
-                        let info = {
-                            cont_map.lock().unwrap().remove(&id)
+                        let found = if let Some(info) = cont_map.lock().unwrap().get_mut(&id) {
+                            info.end_time = msg.time.map(systime_from_secs);
+                            true
+                        } else {
+                            false
                         };
 
-                        if let Some(mut info) = info {
-                            info.end_time = msg.time.map(systime_from_secs);
+                        if found {
+                            // Hack to deal with open events also being processed under delay
+                            let ch = ch.clone();
+                            tokio::task::spawn(async move {
+                                tokio::time::sleep(CONTAINER_CLEANUP_LAG).await;
 
-                            _ = ch.send(ContainerEvent::Stopped(id, info)).await;
+                                let info = {
+                                    cont_map.lock().unwrap().remove(&id)
+                                };
+
+                                if let Some(info) = info {
+                                    _ = ch.send(ContainerEvent::Stopped(id, info)).await;
+                                }
+                            });
                         }
                     },
                     _ => (),
