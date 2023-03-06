@@ -32,28 +32,28 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-#define SB_RDONLY	 1	/* Mount read-only */
-#define SB_NOSUID	 2	/* Ignore suid and sgid bits */
-#define SB_NODEV	 4	/* Disallow access to device special files */
-#define SB_NOEXEC	 8	/* Disallow program execution */
-#define SB_SYNCHRONOUS	16	/* Writes are synced at once */
-#define SB_MANDLOCK	64	/* Allow mandatory locks on an FS */
-#define SB_DIRSYNC	128	/* Directory modifications are synchronous */
-#define SB_NOATIME	1024	/* Do not update access times. */
-#define SB_NODIRATIME	2048	/* Do not update directory access times */
-#define SB_SILENT	32768
-#define SB_POSIXACL	(1<<16)	/* VFS does not apply the umask */
-#define SB_KERNMOUNT	(1<<22) /* this is a kern_mount call */
-#define SB_I_VERSION	(1<<23) /* Update inode I_version field */
-#define SB_LAZYTIME	(1<<25) /* Update the on-disk [acm]times lazily */
+#define SB_RDONLY     1    /* Mount read-only */
+#define SB_NOSUID     2    /* Ignore suid and sgid bits */
+#define SB_NODEV     4    /* Disallow access to device special files */
+#define SB_NOEXEC     8    /* Disallow program execution */
+#define SB_SYNCHRONOUS    16    /* Writes are synced at once */
+#define SB_MANDLOCK    64    /* Allow mandatory locks on an FS */
+#define SB_DIRSYNC    128    /* Directory modifications are synchronous */
+#define SB_NOATIME    1024    /* Do not update access times. */
+#define SB_NODIRATIME    2048    /* Do not update directory access times */
+#define SB_SILENT    32768
+#define SB_POSIXACL    (1<<16)    /* VFS does not apply the umask */
+#define SB_KERNMOUNT    (1<<22) /* this is a kern_mount call */
+#define SB_I_VERSION    (1<<23) /* Update inode I_version field */
+#define SB_LAZYTIME    (1<<25) /* Update the on-disk [acm]times lazily */
 
 /* These sb flags are internal to the kernel */
 #define SB_SUBMOUNT     (1<<26)
-#define SB_NOREMOTELOCK	(1<<27)
-#define SB_NOSEC	(1<<28)
-#define SB_BORN		(1<<29)
-#define SB_ACTIVE	(1<<30)
-#define SB_NOUSER	(1<<31)
+#define SB_NOREMOTELOCK    (1<<27)
+#define SB_NOSEC    (1<<28)
+#define SB_BORN        (1<<29)
+#define SB_ACTIVE    (1<<30)
+#define SB_NOUSER    (1<<31)
 
 #define MAX_PATH 256
 
@@ -61,7 +61,8 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define DYN_ARRAY(s, member) ( ((void*)(s)) + (s)->__data_loc_##member )
 
 // strcpy into an array
-#define COPY_STR(dst, src) (bpf_probe_read_kernel_str((dst), sizeof(dst), (src)))
+#define KCOPY_STR(dst, src) (bpf_probe_read_kernel_str((dst), sizeof(dst), (src)))
+#define UCOPY_STR(dst, src) (bpf_probe_read_user_str((dst), sizeof(dst), (src)))
 
 struct open_inflight_entry {
     const char* filename;
@@ -122,10 +123,6 @@ static int fill_cgroup_name(char *buf, size_t buf_len) {
             bpf_printk("probe_read_kernel_str error");
             return -1;
         }
-
-        if (buf[0] == '\0') {
-            bpf_printk("cgroup_name is empty");
-        }
     } else {
         buf[0] = '\0';
         bpf_printk("cgroup name is NULL");
@@ -145,7 +142,7 @@ static void ensure_cgroup_mapping(pid_t tgid) {
         struct process_info proc_info;
         __builtin_memset(&proc_info, 0, sizeof(proc_info));
 
-        if (fill_cgroup_name(&proc_info.cgroup, sizeof(proc_info.cgroup)) < 0)
+        if (fill_cgroup_name(proc_info.cgroup, sizeof(proc_info.cgroup)) < 0)
             return;
 
         bpf_map_update_elem(&pid_to_info, &tgid, &proc_info, BPF_ANY);
@@ -164,15 +161,23 @@ static int do_enter_open(const char *filename, int flags) {
 }
 
 __attribute__((noinline))
-static void emit_open_event(void *ctx, pid_t tgid, const char *filename) {
+static void emit_open_event(void *ctx, pid_t tgid, const char *filename, bool user) {
     struct evt_open evt;
     __builtin_memset(&evt, 0, sizeof(evt));
 
     evt.tgid = tgid;
 
-    if (COPY_STR(evt.filename, filename) < 0) {
-        bpf_printk("emit_open_event: probe_read_kernel_str error");
-    }
+    if (user) {
+        if (UCOPY_STR(evt.filename, filename) < 0) {
+            bpf_printk("emit_open_event: probe_read_user_str error of %lx", (unsigned long)filename);
+            return;
+        }
+    } else {
+        if (KCOPY_STR(evt.filename, filename) < 0) {
+            bpf_printk("emit_open_event: probe_read_kernel_str error of %lx", (unsigned long)filename);
+            return;
+        }
+    }  
 
     // Only care about absolute paths
     if (!is_abs(evt.filename))
@@ -199,11 +204,12 @@ static int do_exit_open(void *ctx, int rc) {
 
     ensure_cgroup_mapping(tgid);
 
-    emit_open_event(ctx, tgid, entry->filename);
+    emit_open_event(ctx, tgid, entry->filename, true);
 
     return 0;
 }
 
+#if defined(__TARGET_ARCH_x86)
 SEC("tp/syscalls/sys_enter_creat")
 int tracepoint__syscalls__sys_enter_creat(struct trace_event_raw_sys_enter *tp) {
     const char *filename = (const char*) tp->args[0];
@@ -228,6 +234,7 @@ SEC("tp/syscalls/sys_exit_open")
 int exit_open(struct trace_event_raw_sys_exit *tp) {
     return do_exit_open(tp, tp->ret);
 }
+#endif //_TARGET_ARCH_x86
 
 SEC("tp/syscalls/sys_enter_openat")
 int tracepoint__syscalls__sys_enter_openat(struct trace_event_raw_sys_enter *tp) {
@@ -265,13 +272,24 @@ int BPF_KPROBE(kprobe__setup_new_exec, struct linux_binprm *bprm) {
     __builtin_memset(&evt, 0, sizeof(evt));
 
     const char *filename = BPF_CORE_READ(bprm, filename);
-    emit_open_event(ctx, tgid, filename);
+    if (!filename) {
+        bpf_printk("setup_new_exec: filename is NULL");
+        return 0;
+    }
+
+    emit_open_event(ctx, tgid, filename, false);
 
     // There are cases where the interpreter is different than the filename.
     // e.g. for bash scripts. Report both.
     const char *interp = BPF_CORE_READ(bprm, interp);
-    if (interp != filename)
-        emit_open_event(ctx, tgid, interp);
+    if (interp != filename) {
+        if (!interp) {
+            bpf_printk("setup_new_exec: interp is NULL");
+            return 0;
+        }
+
+        emit_open_event(ctx, tgid, interp, false);
+    }
 
     return 0;
 }
@@ -283,14 +301,13 @@ static int cgroup_migrate_task(struct trace_event_raw_cgroup_migrate *tp) {
 
     const char *cgrp = (const char*) DYN_ARRAY(tp, dst_path);
 
-    if (COPY_STR(&proc_info.cgroup, cgrp) < 0) {
+    if (KCOPY_STR(&proc_info.cgroup, cgrp) < 0) {
         bpf_printk("tp/cgroup_attach_task: cgroup name read failed");
         return 0;
     }
 
     bpf_map_update_elem(&pid_to_info, &pid, &proc_info, BPF_ANY);
 
-    bpf_printk("attach: %u to %s", pid, proc_info.cgroup);
     return 0;
 }
 
@@ -357,7 +374,6 @@ int sched_process_exit(struct trace_event_raw_sched_process_template *tp) {
         bpf_printk("error sending zombie event");
     }
 
-    bpf_printk("exit: %u", tgid);
     return 0;
 }
 

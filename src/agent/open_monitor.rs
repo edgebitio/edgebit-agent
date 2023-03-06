@@ -1,8 +1,8 @@
 use std::time::Duration;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
 
 use anyhow::{Result, anyhow};
 use tokio::sync::mpsc::Sender;
@@ -16,7 +16,7 @@ mod probes {
     include!(concat!(env!("OUT_DIR"), "/probes.skel.rs"));
 }
 
-const OPEN_EVENTS_BUF_SIZE: usize = 32;
+const OPEN_EVENTS_BUF_SIZE: usize = 256;
 const ZOMBIE_EVENTS_BUF_SIZE: usize = 4;
 
 #[derive(Clone)]
@@ -251,7 +251,15 @@ async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
 
         for e in events {
             let filename = match e.path() {
-                Ok(path) => path.into_os_string(),
+                Ok(path) => match realpath(&path) {
+                    Ok(path) => {
+                        path
+                    },
+                    Err(err) => {
+                        info!("Failed to canonicalize {}: {err}", path.display());
+                        continue;
+                    }
+                },
                 Err(err) => {
                     error!("Failed to extract file path: {err}");
                     continue;
@@ -268,7 +276,7 @@ async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
 
             let open = OpenEvent {
                 cgroup_name,
-                filename,
+                filename: filename.into(),
             };
 
             _ = ch.send(open).await;
@@ -281,12 +289,23 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
 
     probes.watch_opens(move |buf| {
         let evt = buf.as_ptr() as *const EvtOpen;
-        let fname = unsafe { CStr::from_ptr(&((*evt).filename) as *const i8) };
+        let fname = unsafe { CStr::from_ptr(&((*evt).filename) as *const c_char) };
         let pid = unsafe { u32::from_ne_bytes((*evt).pid) };
 
         let filename = match fname.to_str() {
-            Ok(s) => s,
-            Err(_) => return,
+            Ok(path) => {
+                match realpath(path) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        info!("Failed to canonicalize {path}: {err}");
+                        return;
+                    }
+                }
+            },
+            Err(_) => {
+                error!("File {} contains non-UTF8 chars", fname.to_string_lossy());
+                return;
+            }
         };
 
         let cgroup_name = match probes2.lookup_cgroup(pid) {
@@ -302,8 +321,16 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
             filename: filename.into(),
         };
 
-        _ = ch.blocking_send(open);
+        if let Err(err) = ch.blocking_send(open) {
+            error!("Error sending OpenEvent on a channel: {err}");
+        }
     })
+}
+
+fn realpath<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
+    // Do not use std::fs::canonicalize() as it uses libc::realpath
+    // and musl implements it with open() which causes a feedback loop.
+    Ok(realpath_ext::realpath(path, realpath_ext::RealpathFlags::empty())?)
 }
 
 // matches evt_open in probes.bpf.c
