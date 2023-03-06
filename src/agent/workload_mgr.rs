@@ -49,16 +49,19 @@ pub struct WorkloadManager {
 
 impl WorkloadManager {
     pub async fn start(host_sbom: Sbom, config: Arc<Config>, events: Sender<Event>) -> Result<Self> {
-        let (open_tx, open_rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
-        let open_monitor = OpenMonitor::start(open_tx)?;
-
         let mut host_includes = PathSet::new(PathBuf::from("/"))?;
         for path in config.host_includes() {
             // ignore the error as it's most likely from a missing path (which is ok)
             _ = host_includes.add(&PathBuf::from(path));
         }
 
+        // load() will touch a lot of files so do that before starting to
+        // monitor for open files
         let host_workload = HostWorkload::load(host_sbom, host_includes)?;
+
+        let (open_tx, open_rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
+        let open_monitor = OpenMonitor::start(open_tx)?;
+
         host_workload.start_monitoring(&open_monitor);
 
         let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
@@ -127,8 +130,13 @@ fn queue_open_event(inner: &Inner, evt: OpenEvent) {
             });
 }
 
-fn pop_open_event(inner: &Inner) -> Option<OpenEventQueueItem> {
-    inner.open_event_q.lock().unwrap().pop_front()
+fn pop_open_event(inner: &Inner, cutoff: Instant) -> Option<OpenEventQueueItem> {
+    let mut q = inner.open_event_q.lock().unwrap();
+    if q.front()?.timestamp > cutoff {
+        None
+    } else {
+        q.pop_front()
+    }
 }
 
 async fn service_open_event_queue(inner: Arc<Inner>) {
@@ -137,11 +145,7 @@ async fn service_open_event_queue(inner: Arc<Inner>) {
             .checked_sub(OPEN_EVENT_LAG)
             .unwrap();
 
-        while let Some(item) = pop_open_event(&inner) {
-            if item.timestamp > cutoff {
-                break;
-            }
-
+        while let Some(item) = pop_open_event(&inner, cutoff) {
             handle_open_event(&inner, item.evt).await;
         }
 
