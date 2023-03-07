@@ -1,4 +1,11 @@
-#include "vmlinux.h"
+#if defined(__TARGET_ARCH_x86)
+#    include "vmlinux-x86_64.h"
+#elif defined(__TARGET_ARCH_arm64)
+#    include "vmlinux-aarch64.h"
+#else
+#    error "Unsupported architecture"
+#endif
+
 #include <bpf/bpf_helpers.h>       /* most used helpers: SEC, __always_inline, etc */
 #include <bpf/bpf_core_read.h>     /* for BPF CO-RE helpers */
 #include <bpf/bpf_tracing.h>       /* for getting kprobe arguments */

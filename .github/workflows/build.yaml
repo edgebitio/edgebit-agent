@@ -1,8 +1,9 @@
 name: Build
 
 on:
-  push:
-    on: [push, pull_request_target]
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build-binaries:
