@@ -27,12 +27,14 @@ temp-file = "0.1"
 rs-release = "0.1.9"
 uuid = { version = "1.3.0", features = ["v4"] }
 bollard = "0.14"
+podman-api = "0.9"
 lazy_static = "1.4"
 regex = "1.7"
 fanotify-rs = { git = "https://github.com/eyakubovich/fanotify-rs.git", rev = "aca76327e9c1550057e831275354d00104222b3a" }
 chrono = { version = "0.4.23", features = ["std"] }
 serde_yaml = "0.9.17"
 realpath-ext = "0.1.2"
+async-trait = "0.1.66"
 
 [build-dependencies]
 tonic-build = "0.8"

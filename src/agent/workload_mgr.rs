@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::registry::{Registry, PkgRef};
-use crate::containers::{DockerContainers, ContainerInfo, ContainerEvent};
+use crate::containers::{Containers, ContainerInfo, ContainerEvent};
 use crate::open_monitor::{OpenMonitor, OpenEvent};
 use crate::sbom::Sbom;
 
@@ -33,7 +33,7 @@ struct OpenEventQueueItem {
 
 struct Inner {
     config: Arc<Config>,
-    containers: DockerContainers,
+    containers: Containers,
     open_monitor: OpenMonitor,
     host_workload: Mutex<HostWorkload>,
     container_workloads: Mutex<HashMap<String, ContainerWorkload>>,
@@ -65,7 +65,7 @@ impl WorkloadManager {
         host_workload.start_monitoring(&open_monitor);
 
         let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
-        let containers = DockerContainers::track(config.docker_host(), cont_tx);
+        let containers = Containers::track(config.docker_host(), cont_tx);
 
         let inner = Arc::new(Inner{
             config,
