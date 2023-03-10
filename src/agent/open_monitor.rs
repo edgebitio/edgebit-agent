@@ -1,5 +1,5 @@
 use std::time::Duration;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 use std::ffi::{CStr, c_char};
@@ -182,7 +182,7 @@ impl OpenMonitor {
         let probes = BpfProbes::load()?;
 
         let fan_task = tokio::task::spawn(
-            monitor(fan.clone(), probes.clone(), ch.clone())
+            monitor_fanotify(fan.clone(), probes.clone(), ch.clone())
         );
 
         let opens_task = monitor_bpf_open_events(probes.clone(), ch);
@@ -222,7 +222,7 @@ impl OpenMonitor {
         _ = self.zombie_task.await;
     }
 
-    // NB: Adds the mountpoint of path, not actual path.
+    // NB: Adds the mountpoint of path, not the actual path.
     pub fn add_path(&self, path: &Path) -> Result<()> {
         let path = path.to_str()
             .ok_or_else(|| anyhow!("{} contains non-UTF8 bytes", path.to_string_lossy()))?;
@@ -230,7 +230,7 @@ impl OpenMonitor {
         self.fan.add_open_mark(path)
     }
 
-    // NB: Removes the mountpoint of path, not actual path.
+    // NB: Removes the mountpoint of path, not the actual path.
     pub fn remove_path(&self, path: &Path) -> Result<()> {
         let path = path.to_str()
             .ok_or_else(|| anyhow!("{} contains non-UTF8 bytes", path.to_string_lossy()))?;
@@ -239,7 +239,7 @@ impl OpenMonitor {
     }
 }
 
-async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
+async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
     loop {
         let events = match fan.next().await {
             Ok(events) => events,
@@ -251,15 +251,7 @@ async fn monitor(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
 
         for e in events {
             let filename = match e.path() {
-                Ok(path) => match realpath(&path) {
-                    Ok(path) => {
-                        path
-                    },
-                    Err(err) => {
-                        info!("Failed to canonicalize {}: {err}", path.display());
-                        continue;
-                    }
-                },
+                Ok(path) => path,
                 Err(err) => {
                     error!("Failed to extract file path: {err}");
                     continue;
@@ -293,15 +285,7 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
         let pid = unsafe { u32::from_ne_bytes((*evt).pid) };
 
         let filename = match fname.to_str() {
-            Ok(path) => {
-                match realpath(path) {
-                    Ok(path) => path,
-                    Err(err) => {
-                        info!("Failed to canonicalize {path}: {err}");
-                        return;
-                    }
-                }
-            },
+            Ok(path) => path,
             Err(_) => {
                 error!("File {} contains non-UTF8 chars", fname.to_string_lossy());
                 return;
@@ -325,12 +309,6 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
             error!("Error sending OpenEvent on a channel: {err}");
         }
     })
-}
-
-fn realpath<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
-    // Do not use std::fs::canonicalize() as it uses libc::realpath
-    // and musl implements it with open() which causes a feedback loop.
-    Ok(realpath_ext::realpath(path, realpath_ext::RealpathFlags::empty())?)
 }
 
 // matches evt_open in probes.bpf.c

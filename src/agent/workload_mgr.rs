@@ -18,7 +18,7 @@ use crate::sbom::Sbom;
 
 const BASEOS_ID_PATH: &str = "/var/lib/edgebit/baseos-id";
 
-const OPEN_EVENT_LAG: Duration = Duration::from_secs(5);
+const OPEN_EVENT_LAG: Duration = Duration::from_secs(1);
 
 pub enum Event {
     ContainerStarted(String, ContainerInfo),
@@ -49,7 +49,7 @@ pub struct WorkloadManager {
 
 impl WorkloadManager {
     pub async fn start(host_sbom: Sbom, config: Arc<Config>, events: Sender<Event>) -> Result<Self> {
-        let mut host_includes = PathSet::new(PathBuf::from("/"))?;
+        let mut host_includes = PathSet::new(&PathBuf::from("/"))?;
         for path in config.host_includes() {
             // ignore the error as it's most likely from a missing path (which is ok)
             _ = host_includes.add(&PathBuf::from(path));
@@ -157,27 +157,35 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
     match evt.filename.into_string() {
         Ok(filename) => {
             let cgroup = evt.cgroup_name.unwrap_or(String::new());
-            debug!("[{cgroup}]: {filename}");
+            trace!("[{cgroup}]: {filename}");
 
             let filepath = PathBuf::from(&filename);
-            let filenames = vec![filename];
 
             let in_use = match inner.containers.id_from_cgroup(&cgroup) {
                 Some(id) => {
-                    debug!("Container match: {id}");
+                    trace!("Container match: {id}");
 
                     let container_workloads = inner.container_workloads.lock().unwrap();
                     if let Some(ref workload) = container_workloads.get(&id) {
-                        if !workload.is_path_included(&filepath) {
-                            return;
+                        match workload.resolve(&filepath) {
+                            Ok(Some(filepath)) => {
+                                if !is_file(&filepath) {
+                                    return;
+                                }
+
+                                let pkg = PkgRef{
+                                    id: String::new(),
+                                    filenames: vec![filepath.to_str().unwrap().to_string()],
+                                };
+
+                                Event::PackageInUse(id, vec![pkg])
+                            },
+                            Ok(None) => return,
+                            Err(err) => {
+                                resolve_failed(&filepath, err);
+                                return;
+                            }
                         }
-
-                        let pkg = PkgRef{
-                            id: String::new(),
-                            filenames,
-                        };
-
-                        Event::PackageInUse(id, vec![pkg])
                     } else {
                         error!("Container workload missing for id={id}");
                         return;
@@ -186,21 +194,32 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
                 None => {
                     let host_workload = inner.host_workload.lock().unwrap();
 
-                    if !host_workload.is_path_included(&filepath) {
-                        return;
-                    }
+                    match host_workload.resolve(&filepath) {
+                        Ok(Some(filepath)) => {
+                            if !is_file(&filepath) {
+                                return;
+                            }
 
-                    let pkgs = host_workload.pkgs.get_packages(filenames);
-                    if pkgs.is_empty() {
-                        return;
-                    }
+                            let filenames = vec![filepath.to_str().unwrap().to_string()];
+                            let pkgs = host_workload.pkgs.get_packages(filenames);
 
-                    Event::PackageInUse(host_workload.id.clone(), pkgs)
+                            if pkgs.is_empty() {
+                                return;
+                            }
+
+                            Event::PackageInUse(host_workload.id.clone(), pkgs)
+                        },
+                        Ok(None) => return,
+                        Err(err) => {
+                            resolve_failed(&filepath, err);
+                            return;
+                        }
+                    }
                 }
             };
 
             if let Err(err) = inner.events.send(in_use).await {
-                error!("failed to send events on a channel: {err}");
+                error!("Failed to send events on a channel: {err}");
             }
         },
 
@@ -231,7 +250,7 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
             }
 
             if let Err(err) = inner.events.send(Event::ContainerStarted(id, info)).await {
-                error!("failed to send events on a channel: {err}");
+                error!("Failed to send events on a channel: {err}");
             }
         },
         ContainerEvent::Stopped(id, info) => {
@@ -246,7 +265,7 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
             }
 
             if let Err(err) = inner.events.send(Event::ContainerStopped(id, info)).await {
-                error!("failed to send events on a channel: {err}");
+                error!("Failed to send events on a channel: {err}");
             }
         }
     };
@@ -307,8 +326,9 @@ impl HostWorkload {
         }
     }
 
-    fn is_path_included(&self, path: &Path) -> bool {
-        self.includes.contains(path)
+    // Checks if the path is not filtered out and returns canonicalized verison
+    fn resolve(&self, path: &Path) -> Result<Option<PathBuf>> {
+        self.includes.resolve(path)
     }
 }
 
@@ -339,7 +359,7 @@ struct ContainerWorkload {
 
 impl ContainerWorkload {
     fn new(rootfs: PathBuf, includes: &[String]) -> Result<Self> {
-        let mut includes_set = PathSet::new(rootfs)?;
+        let mut includes_set = PathSet::new(&rootfs)?;
         for path in includes {
             // ignore the error as it's most likely from a missing path (which is ok)
             _ = includes_set.add(&PathBuf::from(path));
@@ -350,8 +370,8 @@ impl ContainerWorkload {
         })
     }
 
-    fn is_path_included(&self, path: &Path) -> bool {
-        self.includes.contains(path)
+    fn resolve(&self, path: &Path) -> Result<Option<PathBuf>> {
+        self.includes.resolve(path)
     }
 
     fn start_monitoring(&self, monitor: &OpenMonitor) {
@@ -375,15 +395,14 @@ struct PathSet {
 }
 
 impl PathSet {
-    fn new(base: PathBuf) -> Result<Self> {
+    fn new(base: &Path) -> Result<Self> {
         Ok(Self {
-            base: base.canonicalize()?,
+            base: realpath(base)?,
             members: HashMap::new(),
         })
     }
 
-    // adss the path, resolving the symlinks first
-    fn add(&mut self, rel_path: &Path) -> Result<()> {
+    fn fullpath(&self, rel_path: &Path) -> Result<PathBuf> {
         // The rel_path is given relative to the base (chroot dir)
         // but should actually be absolute
         if !rel_path.is_absolute() {
@@ -391,20 +410,28 @@ impl PathSet {
         }
 
         let mut full_path = self.base.clone();
-        // strip the leading "/"" so that path joining works
+        // strip the leading "/" so that path joining works
         full_path.push(rel_path.strip_prefix("/").unwrap());
-        full_path = full_path.canonicalize()?;
+        realpath(full_path)
+    }
 
+    fn canonicalize(&self, rel_path: &Path) -> Result<PathBuf> {
         // Now that the symlinks have been removed, turn it back to relative to base
-        let rel_path = full_path.strip_prefix(&self.base)?;
+        let full_path = self.fullpath(rel_path)?;
+        let canonical = full_path.strip_prefix(&self.base)?;
 
-        let key = if rel_path.is_absolute() {
-            rel_path.to_path_buf()
+        if canonical.is_absolute() {
+            Ok(canonical.to_path_buf())
         } else {
-            PathBuf::from("/").join(rel_path)
-        };
+            Ok(PathBuf::from("/").join(canonical))
+        }
+    }
 
-        self.members.insert(key, ());
+    // adds the path, resolving the symlinks first
+    fn add(&mut self, rel_path: &Path) -> Result<()> {
+        let rel_path = self.canonicalize(rel_path)?;
+
+        self.members.insert(rel_path, ());
 
         Ok(())
     }
@@ -415,6 +442,16 @@ impl PathSet {
             .any(|f| rel_path.starts_with(f))
     }
 
+    fn resolve(&self, rel_path: &Path) -> Result<Option<PathBuf>> {
+        let rel_path = self.canonicalize(rel_path)?;
+
+        if self.contains(&rel_path) {
+            Ok(Some(rel_path))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn full_paths<'a>(&'a self) -> impl Iterator<Item=PathBuf> + 'a {
         self.members.keys()
             .map(|p| {
@@ -422,5 +459,34 @@ impl PathSet {
                 path.push(p.strip_prefix("/").unwrap());
                 path
             })
+    }
+}
+
+fn realpath<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
+    // Do not use std::fs::canonicalize() as it uses libc::realpath
+    // and musl implements it with open() which causes a feedback loop.
+    Ok(realpath_ext::realpath(path, realpath_ext::RealpathFlags::empty())?)
+}
+
+fn resolve_failed(filepath: &Path, err: anyhow::Error) {
+    match err.downcast::<std::io::Error>() {
+        Ok(io_err) => {
+            // File not found is ok as it was a transient file that got deleted
+            // This almost exclusively occurs on data files
+            if io_err.kind() != std::io::ErrorKind::NotFound {
+                info!("Failed to canonicalize {}: {io_err}", filepath.display());
+            }
+        },
+        Err(err) => {
+            info!("Failed to canonicalize {}: {err}", filepath.display());
+        }
+    }
+}
+
+#[inline]
+fn is_file(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(md) => md.is_file(),
+        Err(_) => false,
     }
 }

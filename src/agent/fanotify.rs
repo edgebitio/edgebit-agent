@@ -85,7 +85,7 @@ impl Fanotify {
                 },
                 Ok(Err(err)) => {
                     match err.kind() {
-                        ErrorKind::WouldBlock => { continue; },
+                        ErrorKind::WouldBlock => continue,
                         _ => return Err(err.into()),
                     }
                 },
