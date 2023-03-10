@@ -99,7 +99,6 @@ impl Config {
         self.inner.syft_config.clone()
     }
 
-
     pub fn syft_path(&self) -> PathBuf {
         self.inner.syft_path.clone()
     }
