@@ -1,5 +1,8 @@
 [Unit]
 Description=EdgeBit Agent
+Documentation=https://edgebit.io/docs/0.x/install-agent/
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 ExecStart=/opt/edgebit/edgebit-agent
