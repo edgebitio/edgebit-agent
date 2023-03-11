@@ -62,15 +62,21 @@ impl Containers {
         let tracker_task = tokio::task::spawn(async move {
             loop {
                 let tracker = DockerTracker::connect(&host).await.unwrap();
-                if let Ok(real_docker) = tracker.is_genuine().await {
-                    if real_docker {
-                        if let Err(err) = tracker.track(ev.clone()).await {
-                            error!("Container monitoring: {err}");
-                        }
-                    } else {
-                        info!("Not a genuine docker engine, assuming podman and reconnecting");
-                        let tracker = PodmanTracker::connect(&host).await.unwrap();
+                match tracker.is_podman().await {
+                    Ok(true) => {
+                        info!("Podman detected, reconnecting");
+                        match PodmanTracker::connect(&host).await {
+                            Ok(tracker) => {
+                                if let Err(err) = tracker.track(ev.clone()).await {
+                                    error!("Container monitoring: {err}");
+                                }
+                            },
 
+                            Err(err) => error!("Failed to connect to podman: {err}"),
+                        }
+
+                    },
+                    _ => {
                         if let Err(err) = tracker.track(ev.clone()).await {
                             error!("Container monitoring: {err}");
                         }

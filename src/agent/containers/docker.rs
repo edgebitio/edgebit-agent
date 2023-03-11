@@ -55,14 +55,17 @@ impl DockerTracker {
         })
     }
 
-    pub async fn is_genuine(&self) -> Result<bool> {
+    pub async fn is_podman(&self) -> Result<bool> {
         // Check if this is really Docker or actually Podman
-        let ver = self.docker.version().await?;
-        if let Some(platform) = ver.platform {
-            Ok(platform.name.to_lowercase().contains("docker"))
-        } else {
-            Ok(false)
+        if let Some(components) = self.docker.version().await?.components {
+            for comp in components {
+                if comp.name.to_lowercase().contains("podman") {
+                    return Ok(true);
+                }
+            }
         }
+
+        Ok(false)
     }
 
     pub async fn track(self, events: ContainerEventsPtr) -> Result<()> {
