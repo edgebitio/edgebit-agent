@@ -28,7 +28,7 @@ impl Registry {
                     }
                 },
                 Err(e) => {
-                    warn!("'{}': {e}", pkg.id);
+                    debug!("'{}': {e}", pkg.id);
                 }
             }
         }
