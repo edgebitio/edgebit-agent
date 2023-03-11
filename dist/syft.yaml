@@ -3,12 +3,28 @@ output: json
 check-for-app-update: false
 
 catalogers:
+  - alpmdb
+  - apkdb
   - dpkgdb
   - dpkg-db
+  - portage
   - rpmdb
   - rpm-db
+  - ruby-gemfile
   - python-index
   - python-package
+  - php-composer-lock
+  - javascript-lock
+  - java
+  - java-pom
+  - go-module-binary
+  - go-mod-file
+  - rust-cargo-lock
+  - dartlang-lock
+  - dotnet-deps
+  - cocoapods
+  - conan
+  - hackage
 
 exclude:
   - ./snap
