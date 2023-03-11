@@ -1,4 +1,4 @@
-# nfpm example configuration file
+# nfpm configuration file
 #
 # check https://nfpm.goreleaser.com/configuration for detailed usage
 #
@@ -15,7 +15,7 @@ depends:
 maintainer: "EdgeBit, Inc"
 
 description: |
-  EdgeBit Agent compiles a realtime SBOM of the running workloads.
+  EdgeBit Agent creates a realtime SBOM for the running workloads.
 
 vendor: "EdgeBit"
 homepage: "https://edgebit.io"
