@@ -3,7 +3,7 @@
 # check https://nfpm.goreleaser.com/configuration for detailed usage
 #
 name: "edgebit-agent"
-arch: "amd64"
+arch: ${GOARCH}
 platform: "linux"
 version: ${VERSION}
 section: "default"
@@ -22,8 +22,8 @@ homepage: "https://edgebit.io"
 license: "Apache2"
 
 contents:
-  - src: ../target/x86_64-unknown-linux-musl/release/edgebit-agent
-    dst: /opt/edgebit/edgebit-agent
+  - src: ../target/*-unknown-linux-musl/release/edgebit-agent
+    dst: /opt/edgebit/
 
   - src: syft/
     dst: /opt/edgebit/syft
