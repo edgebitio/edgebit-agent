@@ -33,12 +33,28 @@ RUN apt-get update && \
         sudo \
         unzip \
         xutils-dev \
+        jq \
+        clang-10 \
+        libelf1 \
+        protobuf-compiler \
+        libprotobuf-dev \
         && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    useradd rust --user-group --create-home --shell /bin/bash --groups sudo
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set up our environment variables so that we cross-compile using musl-libc by
+# default.
+ENV X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR=/usr/local/musl/ \
+    X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC=1 \
+    AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR=/usr/local/musl/ \
+    AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC=1 \
+    PKG_CONFIG_ALLOW_CROSS=true \
+    PKG_CONFIG_ALL_STATIC=true \
+    LIBZ_SYS_STATIC=1 \
+    TARGET=musl
 
 # Static linking for C++ code
-RUN ln -s "/usr/bin/g++" "/usr/bin/musl-g++"
+RUN ln -s "/usr/bin/g++" "/usr/bin/musl-g++" && \
+    ln -s /usr/include/${ARCH}-linux-gnu/asm /usr/include/${ARCH}-linux-musl/asm
 
 RUN echo "Building zlib" && \
     cd /tmp && \
@@ -54,7 +70,8 @@ RUN cd /tmp && \
     cd libelf-$LIBELF_VERSION && \
     export PREFIX=/usr/local/musl C_INCLUDE_PATH=/usr/local/musl/include LIBRARY_PATH=/usr/local/musl/lib && \
     make libelf.a && make install-static && \
-    rm -r /tmp/*
+    rm -r /tmp/* && \
+    ln -s /usr/lib/${ARCH}-linux-gnu/libelf.so.1 /usr/lib/${ARCH}-linux-gnu/libelf.so
 
 # Set up our path with all our binary directories, including those for the
 # musl-gcc toolchain and for our Rust toolchain.
@@ -62,7 +79,7 @@ RUN cd /tmp && \
 # We use the instructions at https://github.com/rust-lang/rustup/issues/2383
 # to install the rustup toolchain as root.
 ENV RUSTUP_HOME=/opt/rust/rustup \
-    PATH=/home/rust/.cargo/bin:/opt/rust/cargo/bin:/usr/local/musl/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/root/.cargo/bin:/opt/rust/cargo/bin:/usr/local/musl/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Install our Rust toolchain and the `musl` target.  We patch the
 # command-line we pass to the installer so that it won't attempt to
@@ -80,38 +97,17 @@ RUN curl https://sh.rustup.rs -sSf | \
         rustup target add $ARCH-unknown-linux-musl
 ADD cargo-config.toml /opt/rust/cargo/config
 
-# Set up our environment variables so that we cross-compile using musl-libc by
-# default.
-ENV X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR=/usr/local/musl/ \
-    X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC=1 \
-    AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR=/usr/local/musl/ \
-    AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC=1 \
-    PKG_CONFIG_ALLOW_CROSS=true \
-    PKG_CONFIG_ALL_STATIC=true \
-    LIBZ_SYS_STATIC=1 \
-    TARGET=musl
-
-RUN ln -s /usr/include/${ARCH}-linux-gnu/asm /usr/include/${ARCH}-linux-musl/asm && \
-    ln -s /lib/${ARCH}-linux-gnu/libz.so.1 /lib/${ARCH}-linux-gnu/libz.so && \
-    ln -s /usr/lib/${ARCH}-linux-gnu/libelf.so.1 /usr/lib/${ARCH}-linux-gnu/libelf.so
-
-RUN apt update && apt -y install clang-10 libelf1 protobuf-compiler libprotobuf-dev
-
-# Allow sudo without a password.
-ADD sudoers /etc/sudoers.d/nopasswd
-
 # Run all further code as user `rust`, create our working directories, install
 # our config file, and set up our credential helper.
 #
 # You should be able to switch back to `USER root` from another `Dockerfile`
 # using this image if you need to do so.
-USER rust
-RUN mkdir -p /home/rust/libs /home/rust/src /home/rust/.cargo && \
-    ln -s /opt/rust/cargo/config /home/rust/.cargo/config
+RUN mkdir -p /root/libs /root/src /root/.cargo && \
+    ln -s /opt/rust/cargo/config /root/.cargo/config
 
-# Expect our source code to live in /home/rust/src.  We'll run the build as
+# Expect our source code to live in /root/src.  We'll run the build as
 # user `rust`, which will be uid 1000, gid 1000 outside the container.
-WORKDIR /home/rust/src
+WORKDIR /root/src
 
 ENV CARGO_BUILD_TARGET="$ARCH-unknown-linux-musl"
 ENV C_INCLUDE_PATH="/usr/include"

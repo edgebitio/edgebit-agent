@@ -1,13 +1,14 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use log::*;
 use anyhow::Result;
 
 use crate::sbom::Sbom;
+use crate::scoped_path::*;
 
 pub struct Registry {
     // Filename to a list of pkg ids
-    inner: HashMap<String, Vec<String>>,
+    inner: HashMap<WorkloadPath, Vec<String>>,
 }
 
 impl Registry {
@@ -15,11 +16,11 @@ impl Registry {
         Self { inner: HashMap::new() }
     }
 
-    pub fn from_sbom(sbom: &Sbom) -> Result<Self> {
-        let mut inner: HashMap<String, Vec<String>> = HashMap::new();
+    pub fn from_sbom(sbom: &Sbom, rootfs: &RootFsPath) -> Result<Self> {
+        let mut inner: HashMap<WorkloadPath, Vec<String>> = HashMap::new();
 
         for pkg in sbom.artifacts() {
-            match pkg.files() {
+            match pkg.files(rootfs) {
                 Ok(files) => {
                     for file in files {
                         inner.entry(file)
@@ -36,32 +37,16 @@ impl Registry {
         Ok(Self{ inner })
     }
 
-    pub fn add(&mut self, filename: impl Into<String>, pkg: impl Into<String>) {
-        let filename: String = filename.into();
-        match self.inner.get_mut(&filename) {
-            Some(v) => v.push(pkg.into()),
-            None => {
-                _ = self.inner.insert(filename, vec![pkg.into()]);
-            }
-        }
-    }
-
-    pub fn add_pkg(&mut self, id: &str, files: &[String]) {
-        for f in files {
-            self.add(f, id)
-        }
-    }
-
-    pub fn get_packages(&self, filenames: Vec<String>) -> Vec<PkgRef> {
+    pub fn get_packages(&self, filenames: Vec<WorkloadPath>) -> Vec<PkgRef> {
         let mut result: HashMap<String, PkgRef> = HashMap::new();
 
         for f in filenames {
             if let Some(pkg_ids) = self.inner.get(&f) {
                 for id in pkg_ids {
                     match result.get_mut(id) {
-                        Some(pkg) => pkg.filenames.push(f.to_string()),
+                        Some(pkg) => pkg.filenames.push(f.clone()),
                         None => {
-                            result.insert(id.clone(), PkgRef::new(id.clone(), f.to_string()));
+                            result.insert(id.clone(), PkgRef::new(id.clone(), f.clone()));
                         }
                     }
                 }
@@ -74,11 +59,11 @@ impl Registry {
 
 pub struct PkgRef {
     pub id: String,
-    pub filenames: Vec<String>,
+    pub filenames: Vec<WorkloadPath>,
 }
 
 impl PkgRef {
-    fn new(id: String, filename: String) -> Self {
+    fn new(id: String, filename: WorkloadPath) -> Self {
         Self {
             id,
             filenames: vec![filename],

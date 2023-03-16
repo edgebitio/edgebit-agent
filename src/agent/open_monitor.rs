@@ -1,6 +1,4 @@
 use std::time::Duration;
-use std::path::{Path};
-use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 use std::ffi::{CStr, c_char};
 
@@ -11,6 +9,7 @@ use log::*;
 use libbpf_rs::{PerfBufferBuilder, MapFlags};
 
 use crate::fanotify::Fanotify;
+use crate::scoped_path::*;
 
 mod probes {
     include!(concat!(env!("OUT_DIR"), "/probes.skel.rs"));
@@ -223,19 +222,13 @@ impl OpenMonitor {
     }
 
     // NB: Adds the mountpoint of path, not the actual path.
-    pub fn add_path(&self, path: &Path) -> Result<()> {
-        let path = path.to_str()
-            .ok_or_else(|| anyhow!("{} contains non-UTF8 bytes", path.to_string_lossy()))?;
-
-        self.fan.add_open_mark(path)
+    pub fn add_path(&self, path: &RootFsPath) -> Result<()> {
+        self.fan.add_open_mark(path.as_raw().to_path_buf())
     }
 
     // NB: Removes the mountpoint of path, not the actual path.
-    pub fn remove_path(&self, path: &Path) -> Result<()> {
-        let path = path.to_str()
-            .ok_or_else(|| anyhow!("{} contains non-UTF8 bytes", path.to_string_lossy()))?;
-
-        self.fan.remove_open_mark(path)
+    pub fn remove_path(&self, path: &RootFsPath) -> Result<()> {
+        self.fan.remove_open_mark(path.as_raw().to_path_buf())
     }
 }
 
@@ -251,7 +244,7 @@ async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<Open
 
         for e in events {
             let filename = match e.path() {
-                Ok(path) => path,
+                Ok(path) => WorkloadPath::from(path),
                 Err(err) => {
                     error!("Failed to extract file path: {err}");
                     continue;
@@ -268,7 +261,7 @@ async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<Open
 
             let open = OpenEvent {
                 cgroup_name,
-                filename: filename.into(),
+                filename,
             };
 
             _ = ch.send(open).await;
@@ -284,13 +277,7 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
         let fname = unsafe { CStr::from_ptr(&((*evt).filename) as *const c_char) };
         let pid = unsafe { u32::from_ne_bytes((*evt).pid) };
 
-        let filename = match fname.to_str() {
-            Ok(path) => path,
-            Err(_) => {
-                error!("File {} contains non-UTF8 chars", fname.to_string_lossy());
-                return;
-            }
-        };
+        let filename = WorkloadPath::from_cstr(fname);
 
         let cgroup_name = match probes2.lookup_cgroup(pid) {
             Ok(cgroup) => cgroup,
@@ -302,7 +289,7 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
 
         let open = OpenEvent {
             cgroup_name,
-            filename: filename.into(),
+            filename,
         };
 
         if let Err(err) = ch.blocking_send(open) {
@@ -315,10 +302,10 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
 #[repr(C)]
 struct EvtOpen {
     pid: [u8; 4],
-    filename: [std::ffi::c_char; 128],
+    filename: [std::ffi::c_char; 256],
 }
 
 pub struct OpenEvent {
     pub cgroup_name: Option<String>,
-    pub filename: OsString,
+    pub filename: WorkloadPath,
 }

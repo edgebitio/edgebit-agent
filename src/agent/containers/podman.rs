@@ -10,6 +10,7 @@ use podman_api::models::Event;
 use futures::stream::StreamExt;
 
 use super::{ContainerEventsPtr, ContainerInfo};
+use crate::scoped_path::*;
 
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay";
 const EVENT_TYPE_CONTAINER: &str = "container";
@@ -160,7 +161,10 @@ async fn inspect_container(podman: &Podman, id: &str) -> Result<ContainerInfo> {
         Some(driver) => {
             if driver.name.is_none() || driver.name.as_ref().unwrap() == GRAPH_DRIVER_OVERLAYFS {
                 match driver.data {
-                    Some(mut data) => data.remove("MergedDir"),
+                    Some(mut data) => {
+                        data.remove("MergedDir")
+                            .map(|path| HostPath::from(path))
+                    },
                     None => {
                         error!("Container id={id}: graph driver data missing");
                         None

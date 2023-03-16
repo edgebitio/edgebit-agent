@@ -7,6 +7,7 @@ pub mod containers;
 pub mod fanotify;
 pub mod workload_mgr;
 pub mod version;
+pub mod scoped_path;
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -16,6 +17,7 @@ use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
 use tokio::sync::mpsc::{Receiver};
+use gethostname::gethostname;
 
 use config::Config;
 use sbom::Sbom;
@@ -23,6 +25,7 @@ use platform::pb;
 use containers::ContainerInfo;
 use workload_mgr::{WorkloadManager, Event, HostWorkload};
 use version::VERSION;
+use scoped_path::*;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -30,10 +33,16 @@ struct CliArgs {
     config: Option<PathBuf>,
 
     #[clap(long = "sbom")]
-    sbom: Option<String>,
+    sbom: Option<PathBuf>,
 
     #[clap(long = "no-sbom-upload")]
     no_sbom_upload: bool,
+
+    #[clap(long = "host-root")]
+    host_root: Option<PathBuf>,
+
+    #[clap(long = "hostname")]
+    hostname: Option<String>,
 }
 
 #[tokio::main]
@@ -64,18 +73,29 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     let url = config.edgebit_url();
     let token = config.edgebit_id();
+    let host_root: RootFsPath = args.host_root.clone()
+        .unwrap_or("/".into())
+        .into();
+
+    let hostname = args.hostname
+        .clone()
+        .unwrap_or_else(|| {
+            gethostname()
+                .to_string_lossy()
+                .into_owned()
+        });
 
     info!("Connecting to EdgeBit at {url}");
     let mut client = platform::Client::connect(
         url.try_into()?,
         token.try_into()?,
+        hostname.clone(),
     ).await?;
 
     let sbom = match &args.sbom {
         Some(sbom_path) => {
             info!("Loading SBOM");
-            let sbom_path: &Path = sbom_path.as_ref();
-            let sbom = Sbom::load(sbom_path)?;
+            let sbom = Sbom::load(&sbom_path.into())?;
 
             if !args.no_sbom_upload {
                 upload_sbom(&mut client, sbom_path, sbom.id()).await?;
@@ -85,8 +105,8 @@ async fn run(args: &CliArgs) -> Result<()> {
         },
         None => {
             info!("Generating SBOM");
-            let tmp_file = sbom::generate(config.clone())?;
-            let sbom = Sbom::load(tmp_file.path())?;
+            let tmp_file = sbom::generate(config.clone(), &host_root)?;
+            let sbom = Sbom::load(&tmp_file.path().into())?;
 
             if !args.no_sbom_upload {
                 upload_sbom(&mut client, tmp_file.path(), sbom.id()).await?;
@@ -97,11 +117,13 @@ async fn run(args: &CliArgs) -> Result<()> {
     };
 
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
-    let wl_mgr = WorkloadManager::start(sbom, config, events_tx).await?;
+    let host_wrkld = HostWorkload::new(sbom, config.clone(), &host_root, hostname)?;
+    let host_wrkld_req = to_upsert_workload_req(&host_wrkld);
+
+    let _wl_mgr = WorkloadManager::start(config, &host_root, host_wrkld, events_tx)?;
 
     info!("Registering BaseOS workload");
-    let req = wl_mgr.with_host_workload(to_upsert_workload_req);
-    client.upsert_workload(req).await?;
+    client.upsert_workload(host_wrkld_req).await?;
 
     info!("Starting to monitor packages in use");
     report_in_use(&mut client, events_rx).await;
@@ -131,7 +153,7 @@ fn to_upsert_workload_req(workload: &HostWorkload) -> pb::UpsertWorkloadRequest 
         workload: Some(pb::Workload{
             group: workload.group.clone(),
             kind: Some(pb::workload::Kind::Host(pb::Host{
-                hostname: workload.host.clone(),
+                hostname: workload.hostname.clone(),
                 instance: String::new(),
                 os_pretty_name: workload.os_pretty_name.clone(),
             })),
