@@ -12,8 +12,7 @@ Use the following steps to build the agent.
 ```
 git clone https://github.com/edgebitio/edgebit-agent.git
 cd edgebit-agent
-git submodule init
-git submodule update
+git submodule update --init
 ```
 
 2. Build the builder container:
@@ -24,12 +23,7 @@ docker build -t agent-builder .
 
 3. Alias the docker run command to make it easier to reuse. The `cargo-git` and `cargo-registry` volumes are there to preserve the cache between builds.
 ```
-alias agent-builder='docker run --rm -it -v "$(pwd)":/home/rust/src -v cargo-git:/home/rust/.cargo/git -v cargo-registry:/home/rust/.cargo/registry agent-builder'
-```
-
-4. Fix up permissions on the volumes:
-```
-agent-builder sudo chown -R rust:rust /home/rust/.cargo/git /home/rust/.cargo/registry
+alias agent-builder='docker run --rm -it -v "$(pwd)":/root/src -v cargo-git:/root/.cargo/git -v cargo-registry:/root/.cargo/registry agent-builder'
 ```
 
 5. Build the agent
@@ -41,4 +35,51 @@ agent-builder cargo build
 
 # For release build
 agent-builder cargo build --release
+```
+
+# Docker based deployment
+
+## Building a Docker container
+
+To build a Docker image containing the agent, follow the steps below:
+
+1. Checkout the repo and pull down the submodules:
+```
+git clone https://github.com/edgebitio/edgebit-agent.git
+cd edgebit-agent
+git submodule update --init
+```
+
+2. Build the builder container:
+```
+cd build
+docker build -t agent-builder .
+```
+
+3. Build the Docker image:
+```
+cd ..
+docker build -t edgebit-agent .
+```
+
+## Running the Docker container
+
+You can use a configuration file and bind mount it into the container at `/etc/edgebit/config.yaml`.
+However for simple deployments, it can be easier to use environment variables to supply the URL and the ID (deployment token):
+
+```
+docker run \
+  --name edgebit-agent \
+  --rm \
+  -d \
+  --privileged \
+  --pid host \
+  --mount "type=bind,source=/,destination=/host" \
+  --mount "type=bind,source=/etc/edgebit,destination=/etc/edgebit" \
+  --mount "type=bind,source=/sys/kernel/debug,destination=/sys/kernel/debug" \
+  --mount "type=bind,source=/run/docker.sock,destination=/run/docker.sock" \
+  --mount "type=volume,source=var-edgebit,destination=/var/lib/edgebit" \
+  -e "EDGEBIT_ID=YOUR_DEPLOYMENT_TOKEN" \
+  -e "EDGEBIT_URL=https://YOUR_ORG.edgebit.io" \
+  edgebit-agent:latest --hostname "$(hostname)"
 ```

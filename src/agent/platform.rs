@@ -46,12 +46,12 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn connect(endpoint: Uri, deploy_token: String) -> Result<Self> {
+    pub async fn connect(endpoint: Uri, deploy_token: String, hostname: String) -> Result<Self> {
         let channel = Channel::builder(endpoint)
             .connect()
             .await?;
 
-        let sess_keeper = SessionKeeper::new(channel.clone(), deploy_token).await?;
+        let sess_keeper = SessionKeeper::new(channel.clone(), deploy_token, hostname).await?;
         let auth_interceptor = AuthInterceptor{token: sess_keeper.get_auth_token()};
         let sess_keeper_task = tokio::task::spawn(sess_keeper.refresh_loop());
         let inventory_svc = InventoryServiceClient::with_interceptor(channel, auth_interceptor);
@@ -102,7 +102,10 @@ impl Client {
             .map(|p| {
                 pb::PkgInUse{
                     id: p.id,
-                    files: p.filenames,
+                    files: p.filenames
+                        .iter()
+                        .filter_map(|f| f.as_raw().to_str().map(|f| f.to_string()))
+                        .collect()
                 }
             })
             .collect();
@@ -120,14 +123,6 @@ impl Client {
         self.sess_keeper_task.abort();
         _ = self.sess_keeper_task.await;
     }
-}
-
-fn hostname() -> String {
-    gethostname::gethostname().into_string()
-        .unwrap_or_else(|s| {
-            warn!("Hostname contains invalid UTF-8");
-            s.to_string_lossy().into_owned()
-        })
 }
 
 #[derive(Clone)]
@@ -197,7 +192,7 @@ struct SessionKeeper {
 }
 
 impl SessionKeeper {
-    async fn new(channel: Channel, deploy_token: String) -> Result<Self> {
+    async fn new(channel: Channel, deploy_token: String, hostname: String) -> Result<Self> {
         let mut token_svc = TokenServiceClient::new(channel.clone());
 
         let (refresh_token, session_token, expiration) = match RefreshToken::load() {
@@ -215,7 +210,7 @@ impl SessionKeeper {
             Err(_) => {
                 let req = pb::EnrollAgentRequest{
                     deployment_token: deploy_token,
-                    hostname: hostname(),
+                    hostname,
                     agent_version: VERSION.to_string(),
                 };
 

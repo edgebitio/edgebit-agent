@@ -1,11 +1,13 @@
 use std::os::fd::{OwnedFd, FromRawFd, AsRawFd};
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{PathBuf};
+use std::os::unix::ffi::OsStringExt;
 
 use anyhow::{Result, anyhow};
 use fanotify::low_level::{FAN_NONBLOCK, FAN_MARK_ADD, FAN_MARK_REMOVE, FAN_MARK_FILESYSTEM, FAN_OPEN, AT_FDCWD, O_RDONLY};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
+use log::*;
 
 pub struct Event {
     pub mask: u64,
@@ -41,24 +43,25 @@ impl Fanotify {
         })
     }
 
-    pub fn add_open_mark(&self, path: &str) -> Result<()> {
+    pub fn add_open_mark(&self, path: PathBuf) -> Result<()> {
+        trace!("fanotify add mark: {}", path.display());
         fanotify::low_level::fanotify_mark(
             self.fd.as_raw_fd() as i32,
             FAN_MARK_ADD|FAN_MARK_FILESYSTEM,
             FAN_OPEN,
             AT_FDCWD,
-            path)?;
+            path.into_os_string().into_vec())?;
 
         Ok(())
     }
 
-    pub fn remove_open_mark(&self, path: &str) -> Result<()> {
+    pub fn remove_open_mark(&self, path: PathBuf) -> Result<()> {
         fanotify::low_level::fanotify_mark(
             self.fd.as_raw_fd() as i32,
             FAN_MARK_REMOVE|FAN_MARK_FILESYSTEM,
             FAN_OPEN,
             AT_FDCWD,
-            path)?;
+            path.into_os_string().into_vec())?;
 
         Ok(())
     }

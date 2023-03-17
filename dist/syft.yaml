@@ -27,6 +27,12 @@ catalogers:
   - hackage
 
 exclude:
+  - ./dev
+  - ./proc
+  - ./sys
+  - ./tmp
+  - ./run
   - ./snap
+  - ./var/run
   - ./var/lib/docker
   - ./var/lib/containerd

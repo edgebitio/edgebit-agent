@@ -22,4 +22,4 @@ jobs:
         shell: bash
         run: |
           git submodule update --init
-          docker run --rm -v "$(pwd)":/home/rust/src agent-builder cargo build --target-dir /home/rust/target
+          docker build -t edgebit-agent .

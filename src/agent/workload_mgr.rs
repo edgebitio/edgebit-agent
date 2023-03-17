@@ -1,11 +1,11 @@
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::time::{Instant, Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result};
 use log::*;
-use gethostname::gethostname;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -15,8 +15,11 @@ use crate::registry::{Registry, PkgRef};
 use crate::containers::{Containers, ContainerInfo, ContainerEvent};
 use crate::open_monitor::{OpenMonitor, OpenEvent};
 use crate::sbom::Sbom;
+use crate::scoped_path::*;
 
 const BASEOS_ID_PATH: &str = "/var/lib/edgebit/baseos-id";
+
+const OS_RELEASE_PATHS: [&str; 2] = ["etc/os-release", "usr/lib/os-release"];
 
 const OPEN_EVENT_LAG: Duration = Duration::from_secs(1);
 
@@ -33,6 +36,7 @@ struct OpenEventQueueItem {
 
 struct Inner {
     config: Arc<Config>,
+    host_root: RootFsPath,
     containers: Containers,
     open_monitor: OpenMonitor,
     host_workload: Mutex<HostWorkload>,
@@ -48,17 +52,7 @@ pub struct WorkloadManager {
 }
 
 impl WorkloadManager {
-    pub async fn start(host_sbom: Sbom, config: Arc<Config>, events: Sender<Event>) -> Result<Self> {
-        let mut host_includes = PathSet::new(&PathBuf::from("/"))?;
-        for path in config.host_includes() {
-            // ignore the error as it's most likely from a missing path (which is ok)
-            _ = host_includes.add(&PathBuf::from(path));
-        }
-
-        // load() will touch a lot of files so do that before starting to
-        // monitor for open files
-        let host_workload = HostWorkload::load(host_sbom, host_includes)?;
-
+    pub fn start(config: Arc<Config>, host_root: &RootFsPath, host_workload: HostWorkload, events: Sender<Event>) -> Result<Self> {
         let (open_tx, open_rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
         let open_monitor = OpenMonitor::start(open_tx)?;
 
@@ -69,6 +63,7 @@ impl WorkloadManager {
 
         let inner = Arc::new(Inner{
             config,
+            host_root: host_root.clone(),
             containers,
             open_monitor,
             host_workload: Mutex::new(host_workload),
@@ -90,15 +85,6 @@ impl WorkloadManager {
             run_task,
             open_event_task,
         })
-    }
-
-    // Somewhat gross but easiest for now
-    pub fn with_host_workload<T, F>(&self, f: F) -> T
-    where
-        F: FnOnce(&HostWorkload) -> T
-    {
-        let w = self.inner.host_workload.lock().unwrap();
-        f(&*w)
     }
 }
 
@@ -154,78 +140,62 @@ async fn service_open_event_queue(inner: Arc<Inner>) {
 }
 
 async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
-    match evt.filename.into_string() {
-        Ok(filename) => {
-            let cgroup = evt.cgroup_name.unwrap_or(String::new());
-            trace!("[{cgroup}]: {filename}");
+    let cgroup = evt.cgroup_name.unwrap_or(String::new());
+    trace!("[{cgroup}]: {}", evt.filename.display());
 
-            let filepath = PathBuf::from(&filename);
+    let in_use = match inner.containers.id_from_cgroup(&cgroup) {
+        Some(id) => {
+            trace!("Container match: {id}");
 
-            let in_use = match inner.containers.id_from_cgroup(&cgroup) {
-                Some(id) => {
-                    trace!("Container match: {id}");
+            let container_workloads = inner.container_workloads.lock().unwrap();
+            if let Some(ref workload) = container_workloads.get(&id) {
+                match workload.resolve(&evt.filename) {
+                    Ok(Some(filepath)) => {
+                        let pkg = PkgRef{
+                            id: String::new(),
+                            filenames: vec![filepath],
+                        };
 
-                    let container_workloads = inner.container_workloads.lock().unwrap();
-                    if let Some(ref workload) = container_workloads.get(&id) {
-                        match workload.resolve(&filepath) {
-                            Ok(Some(filepath)) => {
-                                if !is_file(&filepath) {
-                                    return;
-                                }
-
-                                let pkg = PkgRef{
-                                    id: String::new(),
-                                    filenames: vec![filepath.to_str().unwrap().to_string()],
-                                };
-
-                                Event::PackageInUse(id, vec![pkg])
-                            },
-                            Ok(None) => return,
-                            Err(err) => {
-                                resolve_failed(&filepath, err);
-                                return;
-                            }
-                        }
-                    } else {
-                        error!("Container workload missing for id={id}");
+                        Event::PackageInUse(id, vec![pkg])
+                    },
+                    Ok(None) => return,
+                    Err(err) => {
+                        resolve_failed(&evt.filename, err);
                         return;
                     }
-                },
-                None => {
-                    let host_workload = inner.host_workload.lock().unwrap();
-
-                    match host_workload.resolve(&filepath) {
-                        Ok(Some(filepath)) => {
-                            if !is_file(&filepath) {
-                                return;
-                            }
-
-                            let filenames = vec![filepath.to_str().unwrap().to_string()];
-                            let pkgs = host_workload.pkgs.get_packages(filenames);
-
-                            if pkgs.is_empty() {
-                                return;
-                            }
-
-                            Event::PackageInUse(host_workload.id.clone(), pkgs)
-                        },
-                        Ok(None) => return,
-                        Err(err) => {
-                            resolve_failed(&filepath, err);
-                            return;
-                        }
-                    }
                 }
-            };
-
-            if let Err(err) = inner.events.send(in_use).await {
-                error!("Failed to send events on a channel: {err}");
+            } else {
+                error!("Container workload missing for id={id}");
+                return;
             }
         },
+        None => {
+            let host_workload = inner.host_workload.lock().unwrap();
 
-        Err(name) => {
-            error!("Non UTF-8 filename opened: {}", name.to_string_lossy());
+            match host_workload.resolve(&evt.filename) {
+                Ok(Some(filepath)) => {
+                    let filenames = vec![filepath];
+                    let pkgs = host_workload.pkgs.get_packages(filenames);
+
+                    if pkgs.is_empty() {
+                        return;
+                    }
+
+                    Event::PackageInUse(host_workload.id.clone(), pkgs)
+                },
+                Ok(None) => {
+                    return;
+                },
+                Err(err) => {
+                    resolve_failed(&evt.filename, err);
+                    return;
+                }
+            }
         }
+    };
+
+    if let Err(err) = inner.events.send(in_use).await {
+        error!("Failed to send events on a channel: {err}");
     }
 }
 
@@ -234,7 +204,9 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
         ContainerEvent::Started(id, info) => {
             match &info.rootfs {
                 Some(rootfs) => {
-                    match ContainerWorkload::new(PathBuf::from(rootfs), &inner.config.container_includes()) {
+                    let rootfs = rootfs.to_rootfs(&inner.host_root);
+
+                    match ContainerWorkload::new(rootfs, &inner.config.container_includes()) {
                         Ok(workload) => {
                             workload.start_monitoring(&inner.open_monitor);
 
@@ -254,14 +226,12 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
             }
         },
         ContainerEvent::Stopped(id, info) => {
-            match &info.rootfs {
-                Some(_) => {
-                    let mut container_workloads = inner.container_workloads.lock().unwrap();
-                    if let Some(workload) = container_workloads.remove(&id) {
-                        workload.stop_monitoring(&inner.open_monitor);
-                    }
-                },
-                None => error!("Container {id} stopped but rootfs missing"),
+            let workload = inner.container_workloads.lock()
+                .unwrap()
+                .remove(&id);
+
+            if let Some(workload) = workload {
+                workload.stop_monitoring(&inner.open_monitor);
             }
 
             if let Err(err) = inner.events.send(Event::ContainerStopped(id, info)).await {
@@ -274,7 +244,7 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
 pub struct HostWorkload {
     pub id: String,
     pub group: Vec<String>,
-    pub host: String,
+    pub hostname: String,
     pub os_pretty_name: String,
     pub image_id: String,
     pkgs: Registry,
@@ -282,14 +252,10 @@ pub struct HostWorkload {
 }
 
 impl HostWorkload {
-    fn load(sbom: Sbom, includes: PathSet) -> Result<Self> {
+    pub fn new(sbom: Sbom, config: Arc<Config>, host_root: &RootFsPath, hostname: String) -> Result<Self> {
         let id = load_baseos_id();
 
-        let host = gethostname()
-            .to_string_lossy()
-            .into_owned();
-
-        let os_pretty_name = match rs_release::get_os_release() {
+        let os_pretty_name = match get_os_release(host_root) {
             Ok(mut os_release) => {
                 os_release.remove("PRETTY_NAME")
                     .or_else(|| os_release.remove("NAME"))
@@ -301,19 +267,29 @@ impl HostWorkload {
             }
         };
 
+        let mut includes = PathSet::new(&host_root)?;
+        for path in config.host_includes() {
+            // ignore the error as it's most likely from a missing path (which is ok)
+            if let Err(err) = includes.add(&WorkloadPath::from(&path)) {
+                warn!("Couldn't add a watch for {}: {err}", path);
+            }
+        }
+
         Ok(Self{
             id,
             group: Vec::new(),
-            host,
+            hostname,
             os_pretty_name,
             image_id: sbom.id(),
-            pkgs: Registry::from_sbom(&sbom)?,
+            pkgs: Registry::from_sbom(&sbom, &host_root)?,
             includes,
         })
     }
 
     fn start_monitoring(&self, monitor: &OpenMonitor) {
-        for path in self.includes.full_paths() {
+        for path in self.includes.all() {
+            let path = path.to_rootfs(&self.includes.base);
+
             if let Err(err) = monitor.add_path(&path) {
                 error!("Failed to start monitoring {} for container: {err}", path.display());
             }
@@ -321,13 +297,14 @@ impl HostWorkload {
     }
 
     fn stop_monitoring(&self, monitor: &OpenMonitor) {
-        for path in self.includes.full_paths() {
+        for path in self.includes.all() {
+            let path = path.to_rootfs(&self.includes.base);
             _ = monitor.remove_path(&path);
         }
     }
 
     // Checks if the path is not filtered out and returns canonicalized verison
-    fn resolve(&self, path: &Path) -> Result<Option<PathBuf>> {
+    fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
         self.includes.resolve(path)
     }
 }
@@ -358,11 +335,11 @@ struct ContainerWorkload {
 }
 
 impl ContainerWorkload {
-    fn new(rootfs: PathBuf, includes: &[String]) -> Result<Self> {
-        let mut includes_set = PathSet::new(&rootfs)?;
+    fn new(host_root: RootFsPath, includes: &[String]) -> Result<Self> {
+        let mut includes_set = PathSet::new(&host_root)?;
         for path in includes {
             // ignore the error as it's most likely from a missing path (which is ok)
-            _ = includes_set.add(&PathBuf::from(path));
+            _ = includes_set.add(&WorkloadPath::from(path));
         }
 
         Ok(Self{
@@ -370,12 +347,14 @@ impl ContainerWorkload {
         })
     }
 
-    fn resolve(&self, path: &Path) -> Result<Option<PathBuf>> {
+    fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
         self.includes.resolve(path)
     }
 
     fn start_monitoring(&self, monitor: &OpenMonitor) {
-        for path in self.includes.full_paths() {
+        for path in self.includes.all() {
+            let path = path.to_rootfs(&self.includes.base);
+
             if let Err(err) = monitor.add_path(&path) {
                 error!("Failed to start monitoring {} for container: {err}", path.display());
             }
@@ -383,92 +362,70 @@ impl ContainerWorkload {
     }
 
     fn stop_monitoring(&self, monitor: &OpenMonitor) {
-        for path in self.includes.full_paths() {
+        for path in self.includes.all() {
+            let path = path.to_rootfs(&self.includes.base);
             _ = monitor.remove_path(&path);
         }
     }
 }
 
 struct PathSet {
-    base: PathBuf,
-    members: HashMap<PathBuf, ()>,
+    base: RootFsPath,
+    members: HashMap<WorkloadPath, ()>,
 }
 
 impl PathSet {
-    fn new(base: &Path) -> Result<Self> {
+    fn new(base: &RootFsPath) -> Result<Self> {
         Ok(Self {
-            base: realpath(base)?,
+            base: base.realpath()?,
             members: HashMap::new(),
         })
     }
 
-    fn fullpath(&self, rel_path: &Path) -> Result<PathBuf> {
-        // The rel_path is given relative to the base (chroot dir)
-        // but should actually be absolute
-        if !rel_path.is_absolute() {
-            return Err(anyhow!("{} is not an absolute path", rel_path.to_string_lossy()));
-        }
-
-        let mut full_path = self.base.clone();
-        // strip the leading "/" so that path joining works
-        full_path.push(rel_path.strip_prefix("/").unwrap());
-        realpath(full_path)
-    }
-
-    fn canonicalize(&self, rel_path: &Path) -> Result<PathBuf> {
-        // Now that the symlinks have been removed, turn it back to relative to base
-        let full_path = self.fullpath(rel_path)?;
-        let canonical = full_path.strip_prefix(&self.base)?;
-
-        if canonical.is_absolute() {
-            Ok(canonical.to_path_buf())
-        } else {
-            Ok(PathBuf::from("/").join(canonical))
-        }
+    fn to_rootfs(&self, path: &WorkloadPath) -> RootFsPath {
+        path.to_rootfs(&self.base)
     }
 
     // adds the path, resolving the symlinks first
-    fn add(&mut self, rel_path: &Path) -> Result<()> {
-        let rel_path = self.canonicalize(rel_path)?;
+    fn add(&mut self, path: &WorkloadPath) -> Result<()> {
+        let rp = self.to_rootfs(path)
+            .realpath()?;
 
-        self.members.insert(rel_path, ());
+        let wp = WorkloadPath::from_rootfs(&self.base, &rp)?;
 
+        self.members.insert(wp, ());
         Ok(())
     }
 
-    fn contains(&self, rel_path: &Path) -> bool {
+    fn contains(&self, path: &WorkloadPath) -> bool {
         self.members
             .keys()
-            .any(|f| rel_path.starts_with(f))
+            .any(|f| path.as_raw().starts_with(f.as_raw()))
     }
 
-    fn resolve(&self, rel_path: &Path) -> Result<Option<PathBuf>> {
-        let rel_path = self.canonicalize(rel_path)?;
+    fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
+        let rp = self.to_rootfs(path)
+            .realpath()?;
 
-        if self.contains(&rel_path) {
-            Ok(Some(rel_path))
+        if !is_file(&rp) {
+            return Ok(None);
+        }
+
+        let path = WorkloadPath::from_rootfs(&self.base, &rp)?;
+
+        if self.contains(&path) {
+            Ok(Some(path))
         } else {
             Ok(None)
         }
     }
 
-    fn full_paths<'a>(&'a self) -> impl Iterator<Item=PathBuf> + 'a {
+    fn all<'a>(&'a self) -> impl Iterator<Item=&WorkloadPath> + 'a {
         self.members.keys()
-            .map(|p| {
-                let mut path = self.base.clone();
-                path.push(p.strip_prefix("/").unwrap());
-                path
-            })
     }
 }
 
-fn realpath<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
-    // Do not use std::fs::canonicalize() as it uses libc::realpath
-    // and musl implements it with open() which causes a feedback loop.
-    Ok(realpath_ext::realpath(path, realpath_ext::RealpathFlags::empty())?)
-}
-
-fn resolve_failed(filepath: &Path, err: anyhow::Error) {
+fn resolve_failed(filepath: &WorkloadPath, err: anyhow::Error) {
     match err.downcast::<std::io::Error>() {
         Ok(io_err) => {
             // File not found is ok as it was a transient file that got deleted
@@ -484,9 +441,19 @@ fn resolve_failed(filepath: &Path, err: anyhow::Error) {
 }
 
 #[inline]
-fn is_file(path: &Path) -> bool {
-    match std::fs::metadata(path) {
+fn is_file(path: &RootFsPath) -> bool {
+    match std::fs::metadata(path.as_raw()) {
         Ok(md) => md.is_file(),
         Err(_) => false,
     }
+}
+
+fn get_os_release(host_root: &RootFsPath) -> rs_release::Result<HashMap<Cow<'static, str>, String>> {
+    for file in OS_RELEASE_PATHS {
+        let file = host_root.join(&PathBuf::from(file));
+        if let Ok(release) = rs_release::parse_os_release(file.as_raw()) {
+            return Ok(release);
+        }
+    }
+    Err(rs_release::OsReleaseError::NoFile)
 }

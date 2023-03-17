@@ -15,6 +15,8 @@ use async_trait::async_trait;
 use docker::DockerTracker;
 use podman::PodmanTracker;
 
+use crate::scoped_path::*;
+
 // Docker containers will contain the id somewhere in the cgroup name
 const CONTAINER_CLEANUP_LAG: Duration = Duration::from_secs(10);
 
@@ -28,7 +30,7 @@ pub struct ContainerInfo {
     pub name: Option<String>,
     pub image_id: Option<String>,
     pub image: Option<String>,
-    pub rootfs: Option<String>,
+    pub rootfs: Option<HostPath>,
     pub start_time: Option<SystemTime>,
     pub end_time: Option<SystemTime>,
 }

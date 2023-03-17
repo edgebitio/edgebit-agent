@@ -14,6 +14,7 @@ use lazy_static::lazy_static;
 use chrono::{DateTime, offset::Utc, offset::FixedOffset};
 
 use super::{ContainerEventsPtr, ContainerInfo};
+use crate::scoped_path::*;
 
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay2";
 const DOCKER_CONNECT_TIMEOUT: u64 = 5;
@@ -184,6 +185,7 @@ async fn inspect_container(docker: &Docker, id: &str) -> Result<ContainerInfo> {
         Some(mut driver) => {
             if driver.name == GRAPH_DRIVER_OVERLAYFS {
                 driver.data.remove("MergedDir")
+                    .map(|path| HostPath::from(path))
             } else {
                 None
             }
