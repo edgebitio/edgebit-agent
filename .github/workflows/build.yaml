@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    tags:
+      - v*
 
 permissions:
   id-token: write
@@ -20,11 +23,13 @@ jobs:
       - name: Authenticate to AWS
         uses: aws-actions/configure-aws-credentials@v1-node16
         with:
-          aws-region: us-west-2
+          aws-region: us-east-1
           role-to-assume: arn:aws:iam::970625735569:role/GitHubActionsECRPush
 
       - name: Configure AWS Docker Auth
         uses: aws-actions/amazon-ecr-login@v1
+        with:
+          registry-type: public
 
       - name: Building builder image
         shell: bash
@@ -48,5 +53,6 @@ jobs:
       - name: Building agent
         uses: docker/build-push-action@v3
         with:
-          push: true
+          platforms: linux/amd64
+          push: ${{ github.ref_type == 'tag' }}
           tags: ${{ steps.meta.outputs.tags }}
