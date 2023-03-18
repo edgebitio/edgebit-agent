@@ -5,12 +5,26 @@ on:
     branches:
       - main
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   build-binaries:
+
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v3
+
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: us-west-2
+          role-to-assume: arn:aws:iam::970625735569:role/GitHubActionsECRPush
+
+      - name: Configure AWS Docker Auth
+        uses: aws-actions/amazon-ecr-login@v1
 
       - name: Building builder image
         shell: bash
@@ -18,8 +32,21 @@ jobs:
           cd build
           docker build -t agent-builder .
 
+      - name: Generate Image Metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            public.ecr.aws/edgebit/edgebit-agent
+          tags: |
+            type=sha,
+            type=semver,pattern=v{{major}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}.{{minor}}.{{patch}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
       - name: Building agent
-        shell: bash
-        run: |
-          git submodule update --init
-          docker build -t edgebit-agent .
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
