@@ -1,17 +1,24 @@
-# Use Ubuntu 18.04 LTS as our base image.
+# Adapted from nasqueron/rust-musl-builder
 FROM ubuntu:20.04
 
 # The Rust toolchain to use when building our image.  Set by `hooks/build`.
 ARG TOOLCHAIN=stable
 
 # The target architecture
-ARG ARCH=x86_64
+ARG TARGETARCH
 
 ARG ZLIB_VERSION=1.2.13
 
 ARG LIBELF_VERSION=0.188 
 
 ENV CC=musl-gcc
+
+# Translate between amd64/arm64 and x86_64/aarch64 and store the latter in ARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        echo -n "x86_64" > /etc/arch; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        echo -n "aarch64" > /etc/arch; \
+    fi
 
 # Make sure we have basic dev tools for building C libraries.  Our goal here is
 # to support the musl-libc builds and Cargo builds needed for a large selection
@@ -54,11 +61,11 @@ ENV X86_64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR=/usr/local/musl/ \
 
 # Static linking for C++ code
 RUN ln -s "/usr/bin/g++" "/usr/bin/musl-g++" && \
-    ln -s /usr/include/${ARCH}-linux-gnu/asm /usr/include/${ARCH}-linux-musl/asm
+    ln -s /usr/include/$(cat /etc/arch)-linux-gnu/asm /usr/include/$(cat /etc/arch)-linux-musl/asm
 
 RUN echo "Building zlib" && \
     cd /tmp && \
-    curl -fLO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
+    curl -sSfLO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
     ./configure --static --prefix=/usr/local/musl && \
     make && make install && \
@@ -66,12 +73,12 @@ RUN echo "Building zlib" && \
 
 # Install libelf
 RUN cd /tmp && \
-    curl -L https://github.com/arachsys/libelf/archive/refs/tags/v$LIBELF_VERSION.tar.gz | tar xz && \
+    curl -sSfL https://github.com/arachsys/libelf/archive/refs/tags/v$LIBELF_VERSION.tar.gz | tar xz && \
     cd libelf-$LIBELF_VERSION && \
     export PREFIX=/usr/local/musl C_INCLUDE_PATH=/usr/local/musl/include LIBRARY_PATH=/usr/local/musl/lib && \
     make libelf.a && make install-static && \
     rm -r /tmp/* && \
-    ln -s /usr/lib/${ARCH}-linux-gnu/libelf.so.1 /usr/lib/${ARCH}-linux-gnu/libelf.so
+    ln -s /usr/lib/$(cat /etc/arch)-linux-gnu/libelf.so.1 /usr/lib/$(cat /etc/arch)-linux-gnu/libelf.so
 
 # Set up our path with all our binary directories, including those for the
 # musl-gcc toolchain and for our Rust toolchain.
@@ -86,7 +93,7 @@ ENV RUSTUP_HOME=/opt/rust/rustup \
 # interact with the user or fool around with TTYs.  We also set the default
 # `--target` to musl so that our users don't need to keep overriding it
 # manually.
-RUN curl https://sh.rustup.rs -sSf | \
+RUN curl https://sh.rustup.rs -sSfL | \
     env CARGO_HOME=/opt/rust/cargo \
         sh -s -- -y --default-toolchain $TOOLCHAIN --profile minimal --no-modify-path && \
     env CARGO_HOME=/opt/rust/cargo \
@@ -94,8 +101,7 @@ RUN curl https://sh.rustup.rs -sSf | \
     env CARGO_HOME=/opt/rust/cargo \
         rustup component add clippy && \
     env CARGO_HOME=/opt/rust/cargo \
-        rustup target add $ARCH-unknown-linux-musl
-ADD cargo-config.toml /opt/rust/cargo/config
+        rustup target add $(cat /etc/arch)-unknown-linux-musl
 
 # Run all further code as user `rust`, create our working directories, install
 # our config file, and set up our credential helper.
@@ -109,6 +115,5 @@ RUN mkdir -p /root/libs /root/src /root/.cargo && \
 # user `rust`, which will be uid 1000, gid 1000 outside the container.
 WORKDIR /root/src
 
-ENV CARGO_BUILD_TARGET="$ARCH-unknown-linux-musl"
 ENV C_INCLUDE_PATH="/usr/include"
 ENV EXTRA_CFLAGS="-fPIC -I/usr/local/musl/include"

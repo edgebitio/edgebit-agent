@@ -14,8 +14,11 @@ permissions:
 
 jobs:
   build-binaries:
+    strategy:
+      matrix:
+        runs-on: [buildjet-4vcpu-ubuntu-2204, buildjet-4vcpu-ubuntu-2204-arm]
 
-    runs-on: ubuntu-latest
+    runs-on: ${{matrix.runs-on}}
 
     steps:
       - uses: actions/checkout@v3
@@ -32,10 +35,11 @@ jobs:
           registry-type: public
 
       - name: Building builder image
-        shell: bash
-        run: |
-          cd build
-          docker build -t agent-builder .
+        uses: docker/build-push-action@v3
+        with:
+          context: build/
+          push: false
+          tags: agent-builder:latest
 
       - name: Generate Image Metadata
         id: meta
@@ -53,6 +57,5 @@ jobs:
       - name: Building agent
         uses: docker/build-push-action@v3
         with:
-          platforms: linux/amd64
           push: ${{ github.ref_type == 'tag' }}
           tags: ${{ steps.meta.outputs.tags }}
