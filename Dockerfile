@@ -1,19 +1,19 @@
 FROM agent-builder:latest AS build
 
+RUN touch /tmp/dummy
+
 COPY . /root/src
 
+# Downloads Syft release (pre-compiled)
 RUN cd dist && make syft
 
-RUN cargo build --release
-
-RUN touch /tmp/dummy
+RUN cargo build --release --target "$(cat /etc/arch)-unknown-linux-musl" && \
+    ln -s "$(cat /etc/arch)-unknown-linux-musl/release/edgebit-agent" "target/edgebit-agent"
 
 # ------------------------------------
 FROM scratch
 
-ARG ARCH=x86_64
-
-COPY --from=build /root/src/target/${ARCH}-unknown-linux-musl/release/edgebit-agent /opt/edgebit/edgebit-agent
+COPY --from=build /root/src/target/edgebit-agent /opt/edgebit/edgebit-agent
 COPY --from=build /root/src/dist/syft/ /opt/edgebit/syft/
 COPY --from=build /root/src/dist/syft.yaml /opt/edgebit/syft.yaml
 
