@@ -28,6 +28,8 @@ struct Inner {
     syft_path: Option<PathBuf>,
 
     docker_host: Option<String>,
+
+    hostname: Option<String>,
 }
 
 // TODO: probably worth using Figment or similar to unify yaml and env vars
@@ -36,8 +38,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let inner: Inner = match std::fs::File::open(path.as_ref()) {
+    pub fn load<P: AsRef<Path>>(path: P, hostname: Option<String>) -> Result<Self> {
+        let mut inner: Inner = match std::fs::File::open(path.as_ref()) {
             Ok(file) => serde_yaml::from_reader(file)?,
             Err(err) => {
                 // Don't bail since the config can also be provided via env vars.
@@ -46,6 +48,8 @@ impl Config {
                 Inner::default()
             }
         };
+
+        inner.hostname = hostname;
 
         let me = Self{
             inner,
@@ -166,5 +170,16 @@ impl Config {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_DOCKER_HOST.to_string())
         }
+    }
+
+    pub fn hostname(&self) -> String {
+        self.inner.hostname
+            .clone()
+            .or_else(|| std::env::var("EDGEBIT_HOSTNAME").ok())
+            .unwrap_or_else(|| {
+                gethostname::gethostname()
+                    .to_string_lossy()
+                    .into_owned()
+            })
     }
 }

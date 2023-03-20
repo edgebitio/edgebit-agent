@@ -17,7 +17,6 @@ use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
 use tokio::sync::mpsc::{Receiver};
-use gethostname::gethostname;
 
 use config::Config;
 use sbom::Sbom;
@@ -61,7 +60,7 @@ async fn run(args: &CliArgs) -> Result<()> {
         None => PathBuf::from(config::CONFIG_PATH),
     };
 
-    let config = Config::load(config_path)
+    let config = Config::load(config_path, args.hostname.clone())
         .map_err(|err| anyhow!("Error loading config file: {err}"))?;
 
     let config = Arc::new(config);
@@ -76,14 +75,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     let host_root: RootFsPath = args.host_root.clone()
         .unwrap_or("/".into())
         .into();
-
-    let hostname = args.hostname
-        .clone()
-        .unwrap_or_else(|| {
-            gethostname()
-                .to_string_lossy()
-                .into_owned()
-        });
+    let hostname = config.hostname();
 
     info!("Connecting to EdgeBit at {url}");
     let mut client = platform::Client::connect(
