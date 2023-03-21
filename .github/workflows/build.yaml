@@ -4,13 +4,6 @@ on:
   pull_request:
     branches:
       - main
-  push:
-    tags:
-      - v*
-
-permissions:
-  id-token: write
-  contents: read
 
 jobs:
   build-binaries:
@@ -23,17 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Authenticate to AWS
-        uses: aws-actions/configure-aws-credentials@v1-node16
-        with:
-          aws-region: us-east-1
-          role-to-assume: arn:aws:iam::970625735569:role/GitHubActionsECRPush
-
-      - name: Configure AWS Docker Auth
-        uses: aws-actions/amazon-ecr-login@v1
-        with:
-          registry-type: public
-
       - name: Building builder image
         uses: docker/build-push-action@v3
         with:
@@ -41,21 +23,7 @@ jobs:
           push: false
           tags: agent-builder:latest
 
-      - name: Generate Image Metadata
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          images: |
-            public.ecr.aws/edgebit/edgebit-agent
-          tags: |
-            type=sha,
-            type=semver,pattern=v{{major}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}.{{minor}}.{{patch}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
-
       - name: Building agent
         uses: docker/build-push-action@v3
         with:
-          push: ${{ github.ref_type == 'tag' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          push: false
