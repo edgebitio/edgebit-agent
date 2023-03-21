@@ -83,3 +83,19 @@ docker run \
   -e "EDGEBIT_URL=https://YOUR_ORG.edgebit.io" \
   edgebit-agent:latest --hostname "$(hostname)"
 ```
+
+# Kubernetes based deployment
+
+The agent can be deployed on the Kubernetes as a privileged pod running as a DaemonSet:
+
+1. Edit [config.yaml](dist/kube/config.yaml) to put configure the EdgeBit URL and your EdgeBit ID (Deployment Token).
+
+2. Apply [config.yaml](dist/kube/config.yaml):
+```
+kubectl apply -f config.yaml
+```
+
+3. Apply [daemonset.yaml](dist/kube/daemonset.yaml) to deploy the Agent:
+```
+kubectl apply -f daemonset.yaml
+```

@@ -28,9 +28,14 @@ struct BpfProbes {
 impl BpfProbes {
     fn load() -> Result<Self> {
         let skel_builder = probes::ProbesSkelBuilder::default();
-        let open_skel = skel_builder.open()?;
-        let mut skel = open_skel.load()?;
-        skel.attach()?;
+        let open_skel = skel_builder.open()
+            .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
+
+        let mut skel = open_skel.load()
+            .map_err(|err| anyhow!("ProbesSkelBuilder::load(): {err}"))?;
+
+        skel.attach()
+            .map_err(|err| anyhow!("ProbesSkel::attach(): {err}"))?;
 
         Ok(Self {
             skel: Arc::new(Mutex::new(skel)),
@@ -43,7 +48,8 @@ impl BpfProbes {
             .unwrap()
             .maps()
             .pid_to_info()
-            .lookup(&key, MapFlags::ANY)?;
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|err| anyhow!("pid_to_info::lookup(): {err}"))?;
 
         Ok(match val {
             Some(bytes) => {
@@ -65,7 +71,8 @@ impl BpfProbes {
             .unwrap()
             .maps_mut()
             .pid_to_info()
-            .delete(pid)?;
+            .delete(pid)
+            .map_err(|err| anyhow!("pid_to_info::delete(): {err}"))?;
 
         Ok(())
     }
