@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: edgebit-agent
+  namespace: edgebit-system
+  labels: {}
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: edgebit-agent
+  template:
+    metadata:
+      labels:
+        app: edgebit-agent
+      name: edgebit-agent
+      annotations:
+    spec:
+      securityContext:
+        runAsUser: 0
+      hostPID: true
+      containers:
+        - name: agent
+          image: "public.ecr.aws/edgebit/edgebit-agent:0.3.0-dev"
+          imagePullPolicy: IfNotPresent
+          command:
+          resources: {}
+          ports:
+          env:
+            - name: EDGEBIT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: edgebit-agent-config
+                  key: edgebit-url
+            - name: EDGEBIT_ID
+              valueFrom:
+                secretKeyRef:
+                    name: edgebit-agent-api-key
+                    key: edgebit-id
+                    optional: false
+            - name: EDGEBIT_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: host
+              mountPath: /host
+              readOnly: true
+            - name: debugfs
+              mountPath: /sys/kernel/debug
+            - name: var-edgebit
+              mountPath: /var/lib/edgebit
+          securityContext:
+            privileged: true
+      tolerations:
+      affinity: {}
+      nodeSelector:
+        kubernetes.io/os: linux
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+        - name: debugfs
+          hostPath:
+            path: /sys/kernel/debug
+        - name: var-edgebit
+          hostPath:
+            path: /var/lib/edgebit
+            type: DirectoryOrCreate
+
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 10%
+    type: RollingUpdate

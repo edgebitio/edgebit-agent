@@ -23,7 +23,10 @@ impl Event {
                 let fd = fd.as_raw_fd() as i32;
                 proc_path.push(fd.to_string());
 
-                Ok(std::fs::read_link(proc_path)?)
+                let filepath = std::fs::read_link(&proc_path)
+                    .map_err(|err| anyhow!("read_link({}): {err}", proc_path.display()))?;
+
+                Ok(filepath)
             },
             None => Err(anyhow!("No open file descriptor"))
         }
@@ -36,7 +39,9 @@ pub struct Fanotify {
 
 impl Fanotify {
     pub fn new() -> Result<Self> {
-        let fd = fanotify::low_level::fanotify_init(FAN_NONBLOCK, O_RDONLY)?;
+        let fd = fanotify::low_level::fanotify_init(FAN_NONBLOCK, O_RDONLY)
+            .map_err(|err| anyhow!("fanotify_init(): {err}"))?;
+
         let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         Ok(Self{
             fd: AsyncFd::with_interest(owned, Interest::READABLE)?,
@@ -50,7 +55,8 @@ impl Fanotify {
             FAN_MARK_ADD|FAN_MARK_FILESYSTEM,
             FAN_OPEN,
             AT_FDCWD,
-            path.into_os_string().into_vec())?;
+            path.into_os_string().into_vec())
+            .map_err(|err| anyhow!("fanotify_mark(add): {err}"))?;
 
         Ok(())
     }
@@ -61,7 +67,8 @@ impl Fanotify {
             FAN_MARK_REMOVE|FAN_MARK_FILESYSTEM,
             FAN_OPEN,
             AT_FDCWD,
-            path.into_os_string().into_vec())?;
+            path.into_os_string().into_vec())
+            .map_err(|err| anyhow!("fanotify_mark(remove): {err}"))?;
 
         Ok(())
     }
