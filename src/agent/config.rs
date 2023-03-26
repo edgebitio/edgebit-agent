@@ -29,6 +29,8 @@ struct Inner {
 
     docker_host: Option<String>,
 
+    containerd_host: Option<String>,
+
     hostname: Option<String>,
 }
 
@@ -162,13 +164,29 @@ impl Config {
         self.try_syft_path().unwrap()
     }
 
-    pub fn docker_host(&self) -> String {
+    pub fn docker_host(&self) -> Option<String> {
         if let Ok(host) = std::env::var("DOCKER_HOST") {
-            host
+            if host.is_empty() {
+                None
+            } else {
+                Some(host)
+            }
         } else {
             self.inner.docker_host
                 .clone()
-                .unwrap_or_else(|| DEFAULT_DOCKER_HOST.to_string())
+                .or_else(|| Some(DEFAULT_DOCKER_HOST.to_string()))
+        }
+    }
+
+    pub fn containerd_host(&self) -> Option<String> {
+        if let Ok(host) = std::env::var("EDGEBIT_CONTAINERD_HOST") {
+            if host.is_empty() {
+                None
+            } else {
+                Some(host)
+            }
+        } else {
+            self.inner.containerd_host.clone()
         }
     }
 

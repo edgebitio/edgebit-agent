@@ -13,11 +13,12 @@ clap = { version = "3.0", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["std"] }
 json = "0.12"
-tokio = { version = "1.23", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "sync"] }
+tokio = { version = "1.26", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "sync"] }
 bytes = "1.3"
 bytemuck = { version = "1.12", features = ["derive"] }
 prost = "0.11"
 prost-types = "0.11"
+tower = "0.4"
 tonic = { version = "0.8", features = ["transport", "tls", "tls-webpki-roots"] }
 gethostname = "0.4"
 libbpf-rs = { version = "0.19.1", features = ["static"] }
@@ -28,6 +29,7 @@ rs-release = "0.1.9"
 uuid = { version = "1.3.0", features = ["v4"] }
 bollard = "0.14"
 podman-api = "0.9"
+containerd-client = { git = "https://github.com/containerd/rust-extensions.git", rev = "ba111e55aaf3829964730287ae9f96d0088b4c18" }
 lazy_static = "1.4"
 regex = "1.7"
 fanotify-rs = { git = "https://github.com/eyakubovich/fanotify-rs.git", rev = "aca76327e9c1550057e831275354d00104222b3a" }
