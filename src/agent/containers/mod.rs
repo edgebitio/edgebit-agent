@@ -1,19 +1,27 @@
 pub mod docker;
 pub mod podman;
+pub mod k8s_containerd;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, Duration};
+use std::path::PathBuf;
 
+use anyhow::{Result, anyhow};
 use log::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
+use tokio::net::{UnixStream, TcpStream};
 use async_trait::async_trait;
+use tonic::transport::channel::Channel;
+use tonic::transport::{Uri, Endpoint};
+use tower::service_fn;
 
 use docker::DockerTracker;
 use podman::PodmanTracker;
+use k8s_containerd::K8sContainerdTracker;
 
 use crate::scoped_path::*;
 
@@ -49,21 +57,35 @@ struct Inner {
 
 pub struct Containers {
     inner: Arc<Inner>,
-    tracker_task: JoinHandle<()>,
+    tasks: Vec<JoinHandle<()>>,
 }
 
 impl Containers {
-    pub fn track(host: String, ch: Sender<ContainerEvent>) -> Self {
+    pub fn new(ch: Sender<ContainerEvent>) -> Self {
         let inner = Arc::new(Inner {
             cont_map: Arc::new(Mutex::new(ContainerMap::new())),
             ch: ch.clone(),
         });
 
-        let ev: ContainerEventsPtr = inner.clone();
+        Self {
+            inner,
+            tasks: Vec::new(),
+        }
+    }
 
-        let tracker_task = tokio::task::spawn(async move {
+    pub fn track_docker(&mut self, host: String) {
+        let ev: ContainerEventsPtr = self.inner.clone();
+
+        let task = tokio::task::spawn(async move {
             loop {
-                let tracker = DockerTracker::connect(&host).await.unwrap();
+                let tracker = match DockerTracker::connect(&host).await {
+                    Ok(tracker) => tracker,
+                    Err(err) => {
+                        error!("Failed to connect to docker: {err}");
+                        return;
+                    }
+                };
+
                 match tracker.is_podman().await {
                     Ok(true) => {
                         info!("Podman detected, reconnecting");
@@ -89,10 +111,23 @@ impl Containers {
             }
         });
 
-        Self {
-            inner,
-            tracker_task,
-        }
+        self.tasks.push(task);
+    }
+
+    pub fn track_k8s(&mut self, host: String) {
+        let ev: ContainerEventsPtr = self.inner.clone();
+
+        let task = tokio::task::spawn(async move {
+            loop {
+                let tracker = K8sContainerdTracker::connect(&host).await;
+                if let Err(err) = tracker.track(ev.clone()).await {
+                    error!("Container monitoring: {err}");
+                }
+
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
+        self.tasks.push(task);
     }
 
     pub fn id_from_cgroup(&self, cgroup: &str) -> Option<String> {
@@ -181,3 +216,24 @@ impl ContainerRuntimeEvents for Inner {
 }
 
 pub type ContainerEventsPtr = Arc<dyn ContainerRuntimeEvents + Send + Sync>;
+
+pub async fn grpc_connect(host: &str) -> Result<Channel> {
+    info!("Connecting to {host}");
+
+    let ep = Endpoint::try_from("http://[::]").unwrap();
+
+    let addr = host.strip_prefix("tcp://")
+        .or_else(|| host.strip_prefix("http://"));
+
+    let ch = if let Some(addr) = addr {
+        let host = addr.to_string();
+        ep.connect_with_connector(service_fn(move |_: Uri| TcpStream::connect(host.clone()))).await?
+    } else if let Some(addr) = host.strip_prefix("unix://") {
+        let path = PathBuf::from(addr);
+        ep.connect_with_connector(service_fn(move |_: Uri| UnixStream::connect(path.clone()))).await?
+    } else {
+        return Err(anyhow!("Unsupported host scheme: {host}"));
+    };
+
+    Ok(ch)
+}

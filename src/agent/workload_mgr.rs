@@ -59,7 +59,13 @@ impl WorkloadManager {
         host_workload.start_monitoring(&open_monitor);
 
         let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
-        let containers = Containers::track(config.docker_host(), cont_tx);
+        let mut containers = Containers::new(cont_tx);
+        if let Some(host) = config.docker_host() {
+            containers.track_docker(host);
+        }
+        if let Some(host) = config.containerd_host() {
+            containers.track_k8s(host);
+        }
 
         let inner = Arc::new(Inner{
             config,
