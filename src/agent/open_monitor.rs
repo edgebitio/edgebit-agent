@@ -27,6 +27,9 @@ struct BpfProbes {
 
 impl BpfProbes {
     fn load() -> Result<Self> {
+        // first thing is to bump the ulimit for locked memory for older kernels
+        bump_rlimit()?;
+
         let skel_builder = probes::ProbesSkelBuilder::default();
         let open_skel = skel_builder.open()
             .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
@@ -315,4 +318,16 @@ struct EvtOpen {
 pub struct OpenEvent {
     pub cgroup_name: Option<String>,
     pub filename: WorkloadPath,
+}
+
+fn bump_rlimit() -> Result<()> {
+    use nix::sys::resource::Resource;
+    nix::sys::resource::setrlimit(
+        Resource::RLIMIT_MEMLOCK,
+        nix::sys::resource::RLIM_INFINITY,
+        nix::sys::resource::RLIM_INFINITY
+    )
+        .map_err(|err| anyhow!("failed to raise lock memory rlimit: {err}"))?;
+
+    Ok(())
 }

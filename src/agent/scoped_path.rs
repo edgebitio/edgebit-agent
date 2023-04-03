@@ -49,7 +49,7 @@ impl RootFsPath {
         self.0.display()
     }
 
-    pub fn join(&self, path: &Path) -> RootFsPath {
+    pub fn join<P: AsRef<Path>>(&self, path: P) -> RootFsPath {
         self.0.join(path).into()
     }
 

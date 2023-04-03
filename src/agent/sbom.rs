@@ -1,38 +1,92 @@
-use std::process::{Command};
-use std::path::{PathBuf};
+use std::path::{PathBuf, Path};
 use std::io::BufReader;
 use std::sync::Arc;
+use std::process::Command;
 
 use anyhow::{Result, anyhow};
 use log::*;
 use serde::Deserialize;
 use temp_file::TempFile;
+use nix::sys::wait::WaitStatus;
 
 use crate::config::Config;
 use crate::scoped_path::*;
+use crate::chroot_cmd::{CommandWithChroot, TmpFS};
 
-pub fn generate(config: Arc<Config>, root: &RootFsPath) -> Result<TempFile> {
-    let syft = config.syft_path();
-    let tmp = TempFile::new()?;
-    let out_path = tmp.path();
-    let syft_cfg = config.syft_config();
+pub async fn generate(config: Arc<Config>, root: &RootFsPath) -> Result<TempFile> {
+    // If the agent is running in a container, the host FS is mounted at
+    // at /host or similar. Since some symlinks are absolute, e.g. /usr/bin => /bin,
+    // running Syft on /host will not work: /host/usr/bin will resolve to /bin
+    // instead of /host/bin.
+    // To combat this, we need to chroot into /host and then execute Syft.
+    // This is problematic for two reasons:
+    // 1. Syft binary is inside the container, not on the host.
+    //    We solve this by first opening the binary file, and using execveat
+    //    to execute using a FD.
+    // 2. We need to provide a config file to Syft which resides inside the container.
+    //    FD trick won't work since it needs to be a filename to pass on cmdline.
+    //    This is solved by mounting tmpfs at /host/tmp (hoping that /host/tmp exists),
+    //    copying the file there and then passing --config /tmp/syft.yaml on cmdline.
 
-    let child = Command::new(syft)
+    let sbom = if root.as_raw() == Path::new("/") {
+        generate_no_chroot(&config.syft_path(), &config.syft_config()).await?
+    } else {
+        generate_with_chroot(config.syft_path(), &config.syft_config(), root.as_raw()).await?
+    };
+
+    info!("SBOM generated");
+    Ok(sbom)
+}
+
+async fn generate_no_chroot(syft_path: &Path, syft_config: &Path) -> Result<TempFile> {
+    let sbom = TempFile::new()?;
+    let out_path = sbom.path();
+
+    let child = Command::new(syft_path)
         .arg("--file")
         .arg(out_path)
         .arg("--config")
-        .arg(syft_cfg)
-        .arg(root.as_raw().as_os_str())
+        .arg(syft_config)
+        .arg("/")
         .spawn()?;
 
-    let out = child.wait_with_output()?;
+    let out = tokio::task::spawn_blocking(move || {
+        child.wait_with_output()
+    }).await??;
 
     if !out.status.success() {
         return Err(anyhow!("syft failed"));
     }
 
-    info!("SBOM generated");
-    Ok(tmp)
+    Ok(sbom)
+}
+
+async fn generate_with_chroot(syft_path: PathBuf, syft_config: &Path, root: &Path) -> Result<TempFile> {
+    let sbom = TempFile::new()?;
+    let sbom_file = std::fs::File::options()
+        .write(true)
+        .open(sbom.path())?;
+
+    let tmp = TmpFS::mount(root.join("tmp").to_path_buf())?;
+    let syft_config_path = tmp.mountpoint().join("syft.yaml");
+
+    std::fs::copy(syft_config, &syft_config_path)?;
+
+    let mut cmd = CommandWithChroot::new(syft_path);
+    cmd.chroot(root.to_path_buf())
+        .stdin(std::fs::File::open(syft_config)?)
+        .stdout(sbom_file)
+        .arg("syft".into())
+        .arg("--config".into())
+        .arg("/tmp/syft.yaml".into())
+        .arg("/".into());
+
+    match cmd.run().await? {
+        WaitStatus::Exited(_, 0) => (),
+        _ => return Err(anyhow!("syft failed")),
+    };
+
+    Ok(sbom)
 }
 
 pub struct Sbom {

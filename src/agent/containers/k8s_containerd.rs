@@ -147,7 +147,7 @@ impl K8sContainerdTracker {
         for t in resp.tasks {
             if Status::from_i32(t.status) == Some(Status::Running) {
                 if let Some(info) = containers.remove(&t.id) {
-                    events.add_container(t.container_id, info);
+                    events.add_container(t.id, info);
                 }
             }
         }

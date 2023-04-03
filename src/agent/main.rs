@@ -8,6 +8,7 @@ pub mod fanotify;
 pub mod workload_mgr;
 pub mod version;
 pub mod scoped_path;
+pub mod chroot_cmd;
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -97,7 +98,7 @@ async fn run(args: &CliArgs) -> Result<()> {
         },
         None => {
             info!("Generating SBOM");
-            let tmp_file = sbom::generate(config.clone(), &host_root)?;
+            let tmp_file = sbom::generate(config.clone(), &host_root).await?;
             let sbom = Sbom::load(&tmp_file.path().into())?;
 
             if !args.no_sbom_upload {

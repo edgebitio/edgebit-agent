@@ -275,9 +275,11 @@ impl HostWorkload {
 
         let mut includes = PathSet::new(&host_root)?;
         for path in config.host_includes() {
-            // ignore the error as it's most likely from a missing path (which is ok)
             if let Err(err) = includes.add(&WorkloadPath::from(&path)) {
-                warn!("Couldn't add a watch for {}: {err}", path);
+                // ignore "no such file or directory" erros
+                if !is_not_found(&err) {
+                    error!("Failed to add a watch for {}: {err}", path);
+                }
             }
         }
 
@@ -462,4 +464,12 @@ fn get_os_release(host_root: &RootFsPath) -> rs_release::Result<HashMap<Cow<'sta
         }
     }
     Err(rs_release::OsReleaseError::NoFile)
+}
+
+fn is_not_found(err: &anyhow::Error) -> bool {
+    if let Some(err) = err.downcast_ref::<std::io::Error>() {
+        err.kind() == std::io::ErrorKind::NotFound
+    } else {
+        false
+    }
 }
