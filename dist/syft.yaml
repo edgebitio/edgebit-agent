@@ -11,12 +11,11 @@ catalogers:
   - rpmdb
   - rpm-db
   - ruby-gemfile
-  - python-index
   - python-package
   - php-composer-lock
   - javascript-lock
   - java
-  - java-pom
+  - graalvm-native-image
   - go-module-binary
   - go-mod-file
   - rust-cargo-lock
@@ -25,6 +24,7 @@ catalogers:
   - cocoapods
   - conan
   - hackage
+  - sbom
 
 exclude:
   - ./dev
