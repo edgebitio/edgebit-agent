@@ -103,6 +103,17 @@ RUN curl https://sh.rustup.rs -sSfL | \
     env CARGO_HOME=/opt/rust/cargo \
         rustup target add $(cat /etc/arch)-unknown-linux-musl
 
+# Install nfpm to create .rpm/.deb artifacts
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        arch="x86_64"; \
+    else \
+        arch="arm64"; \
+    fi; \
+    mkdir -p /tmp/nfpm && \
+    cd /tmp/nfpm && \
+    curl -sL "https://github.com/goreleaser/nfpm/releases/download/v2.27.1/nfpm_2.27.1_Linux_${arch}.tar.gz" | tar xz && \
+    cp /tmp/nfpm/nfpm /usr/local/bin
+
 # Run all further code as user `rust`, create our working directories, install
 # our config file, and set up our credential helper.
 #

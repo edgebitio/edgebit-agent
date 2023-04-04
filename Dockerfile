@@ -4,11 +4,11 @@ RUN touch /tmp/dummy
 
 COPY . /root/src
 
-# Downloads Syft release (pre-compiled)
-RUN cd dist && make syft
-
 RUN cargo build --release --target "$(cat /etc/arch)-unknown-linux-musl" && \
     ln -s "$(cat /etc/arch)-unknown-linux-musl/release/edgebit-agent" "target/edgebit-agent"
+
+# Downloads Syft and make .rpm/deb packages
+RUN cd dist && make all
 
 # ------------------------------------
 FROM scratch

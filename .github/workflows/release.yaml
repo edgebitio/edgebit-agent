@@ -7,10 +7,10 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
-  build-binaries:
+  release-binaries:
     strategy:
       matrix:
         runs-on: [buildjet-4vcpu-ubuntu-2204, buildjet-4vcpu-ubuntu-2204-arm]
@@ -54,5 +54,25 @@ jobs:
       - name: Building agent
         uses: docker/build-push-action@v3
         with:
+          push: false
+          target: build
+          tags: edgebit-agent-build
+
+      - name: Building and pushing agent container
+        uses: docker/build-push-action@v3
+        with:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Copying out package artifacts
+        shell: bash
+        run: |
+          docker run --rm -i -v $(pwd)/dist/:/mnt edgebit-agent-build /bin/bash -c "cp -R /root/src/dist/output /mnt"
+
+      - name: Creating a draft release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/output/edgebit-agent*
