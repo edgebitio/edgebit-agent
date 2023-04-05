@@ -113,6 +113,13 @@ impl WorkloadPath {
         self.0.join(path)
             .into()
     }
+
+    pub fn realpath(&self, prefix: &RootFsPath) -> Result<Self> {
+        let rp = self.to_rootfs(prefix)
+            .realpath()?;
+
+        Ok(WorkloadPath::from_rootfs(prefix, &rp)?)
+    }
 }
 
 impl <T: Into<PathBuf>> From<T> for WorkloadPath {

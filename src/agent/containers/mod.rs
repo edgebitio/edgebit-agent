@@ -41,8 +41,10 @@ pub struct ContainerInfo {
     pub rootfs: Option<HostPath>,
     pub start_time: Option<SystemTime>,
     pub end_time: Option<SystemTime>,
+    pub mounts: Vec<PathBuf>,
 }
 
+#[derive(Debug)]
 pub enum ContainerEvent {
     Started(String, ContainerInfo),
     Stopped(String, ContainerInfo),
@@ -151,36 +153,14 @@ impl Containers {
 
 #[async_trait]
 pub trait ContainerRuntimeEvents {
-    fn add_container(&self, id: String, info: ContainerInfo);
-    async fn flush(&self);
     async fn container_started(&self, id: String, info: ContainerInfo);
     async fn container_stopped(&self, id: String, stop_time: SystemTime);
 }
 
 #[async_trait]
 impl ContainerRuntimeEvents for Inner {
-    fn add_container(&self, id: String, info: ContainerInfo) {
-        self.cont_map.lock()
-            .unwrap()
-            .insert(id, info);
-    }
-
-    async fn flush(&self) {
-        let events: Vec<_> = self.cont_map.lock()
-            .unwrap()
-            .iter()
-            .map(|(id, info)| ContainerEvent::Started(id.clone(), info.clone()))
-            .collect();
-
-        for ev in events {
-            if let Err(err) = self.ch.send(ev).await {
-                error!("Failed to send events on a channel: {err}");
-            }
-        }
-    }
-
     async fn container_started(&self, id: String, info: ContainerInfo) {
-        debug!("Container {id}: {info:?}");
+        debug!("Container started {id}: {info:?}");
 
         self.cont_map.lock()
             .unwrap()

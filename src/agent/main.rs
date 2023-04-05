@@ -110,7 +110,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     };
 
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
-    let host_wrkld = HostWorkload::new(sbom, config.clone(), &host_root, hostname)?;
+    let host_wrkld = HostWorkload::new(sbom, config.clone(), host_root.clone(), hostname)?;
     let host_wrkld_req = to_upsert_workload_req(&host_wrkld);
 
     let _wl_mgr = WorkloadManager::start(config, &host_root, host_wrkld, events_tx)?;

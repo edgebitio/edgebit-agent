@@ -207,12 +207,14 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
 
 async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
     match evt {
-        ContainerEvent::Started(id, info) => {
+        ContainerEvent::Started(id, mut info) => {
             match &info.rootfs {
                 Some(rootfs) => {
                     let rootfs = rootfs.to_rootfs(&inner.host_root);
+                    let mut excludes = inner.config.container_excludes();
+                    excludes.append(&mut info.mounts);
 
-                    match ContainerWorkload::new(rootfs, &inner.config.container_includes()) {
+                    match ContainerWorkload::new(rootfs, &inner.config.container_excludes()) {
                         Ok(workload) => {
                             workload.start_monitoring(&inner.open_monitor);
 
@@ -254,14 +256,15 @@ pub struct HostWorkload {
     pub os_pretty_name: String,
     pub image_id: String,
     pkgs: Registry,
+    host_root: RootFsPath,
     includes: PathSet,
 }
 
 impl HostWorkload {
-    pub fn new(sbom: Sbom, config: Arc<Config>, host_root: &RootFsPath, hostname: String) -> Result<Self> {
+    pub fn new(sbom: Sbom, config: Arc<Config>, host_root: RootFsPath, hostname: String) -> Result<Self> {
         let id = load_baseos_id();
 
-        let os_pretty_name = match get_os_release(host_root) {
+        let os_pretty_name = match get_os_release(&host_root) {
             Ok(mut os_release) => {
                 os_release.remove("PRETTY_NAME")
                     .or_else(|| os_release.remove("NAME"))
@@ -273,14 +276,17 @@ impl HostWorkload {
             }
         };
 
-        let mut includes = PathSet::new(&host_root)?;
+        let mut includes = PathSet::new()?;
         for path in config.host_includes() {
-            if let Err(err) = includes.add(&WorkloadPath::from(&path)) {
-                // ignore "no such file or directory" erros
-                if !is_not_found(&err) {
-                    error!("Failed to add a watch for {}: {err}", path);
+            match WorkloadPath::from(&path).realpath(&host_root) {
+                Ok(path) => includes.add(path),
+                Err(err) => {
+                    // ignore "no such file or directory" erros
+                    if !is_not_found(&err) {
+                        error!("Failed to add a watch for {}: {err}", path.display());
+                    }
                 }
-            }
+            };
         }
 
         Ok(Self{
@@ -290,13 +296,14 @@ impl HostWorkload {
             os_pretty_name,
             image_id: sbom.id(),
             pkgs: Registry::from_sbom(&sbom, &host_root)?,
+            host_root,
             includes,
         })
     }
 
     fn start_monitoring(&self, monitor: &OpenMonitor) {
         for path in self.includes.all() {
-            let path = path.to_rootfs(&self.includes.base);
+            let path = path.to_rootfs(&self.host_root);
 
             if let Err(err) = monitor.add_path(&path) {
                 error!("Failed to start monitoring {} for container: {err}", path.display());
@@ -306,14 +313,27 @@ impl HostWorkload {
 
     fn stop_monitoring(&self, monitor: &OpenMonitor) {
         for path in self.includes.all() {
-            let path = path.to_rootfs(&self.includes.base);
+            let path = path.to_rootfs(&self.host_root);
             _ = monitor.remove_path(&path);
         }
     }
 
     // Checks if the path is not filtered out and returns canonicalized verison
     fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
-        self.includes.resolve(path)
+        let rp = path.to_rootfs(&self.host_root)
+            .realpath()?;
+
+        if !is_file(&rp) {
+            return Ok(None);
+        }
+
+        let path = WorkloadPath::from_rootfs(&self.host_root, &rp)?;
+
+        if self.includes.contains(&path) {
+            Ok(Some(path))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -339,93 +359,82 @@ fn uuid_string() -> String {
         .to_string()
 }
 struct ContainerWorkload {
-    includes: PathSet,
+    host_root: RootFsPath,
+    excludes: PathSet,
 }
 
 impl ContainerWorkload {
-    fn new(host_root: RootFsPath, includes: &[String]) -> Result<Self> {
-        let mut includes_set = PathSet::new(&host_root)?;
-        for path in includes {
-            // ignore the error as it's most likely from a missing path (which is ok)
-            _ = includes_set.add(&WorkloadPath::from(path));
+    fn new(host_root: RootFsPath, excludes: &[PathBuf]) -> Result<Self> {
+        let mut exclude_set = PathSet::new()?;
+        for path in excludes {
+            let path = WorkloadPath::from(path);
+            match path.realpath(&host_root) {
+                Ok(path) => exclude_set.add(path),
+                Err(err) => {
+                    // ignore "no such file or directory" erros
+                    if !is_not_found(&err) {
+                        error!("Failed to add a watch for {}: {err}", path.display());
+                    }
+                }
+            };
         }
 
         Ok(Self{
-            includes: includes_set,
+            host_root,
+            excludes: exclude_set,
         })
     }
 
     fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
-        self.includes.resolve(path)
-    }
-
-    fn start_monitoring(&self, monitor: &OpenMonitor) {
-        for path in self.includes.all() {
-            let path = path.to_rootfs(&self.includes.base);
-
-            if let Err(err) = monitor.add_path(&path) {
-                error!("Failed to start monitoring {} for container: {err}", path.display());
-            }
-        }
-    }
-
-    fn stop_monitoring(&self, monitor: &OpenMonitor) {
-        for path in self.includes.all() {
-            let path = path.to_rootfs(&self.includes.base);
-            _ = monitor.remove_path(&path);
-        }
-    }
-}
-
-struct PathSet {
-    base: RootFsPath,
-    members: HashMap<WorkloadPath, ()>,
-}
-
-impl PathSet {
-    fn new(base: &RootFsPath) -> Result<Self> {
-        Ok(Self {
-            base: base.realpath()?,
-            members: HashMap::new(),
-        })
-    }
-
-    fn to_rootfs(&self, path: &WorkloadPath) -> RootFsPath {
-        path.to_rootfs(&self.base)
-    }
-
-    // adds the path, resolving the symlinks first
-    fn add(&mut self, path: &WorkloadPath) -> Result<()> {
-        let rp = self.to_rootfs(path)
-            .realpath()?;
-
-        let wp = WorkloadPath::from_rootfs(&self.base, &rp)?;
-
-        self.members.insert(wp, ());
-        Ok(())
-    }
-
-    fn contains(&self, path: &WorkloadPath) -> bool {
-        self.members
-            .keys()
-            .any(|f| path.as_raw().starts_with(f.as_raw()))
-    }
-
-    fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
-        let rp = self.to_rootfs(path)
+        let rp = path.to_rootfs(&self.host_root)
             .realpath()?;
 
         if !is_file(&rp) {
             return Ok(None);
         }
 
-        let path = WorkloadPath::from_rootfs(&self.base, &rp)?;
+        let path = WorkloadPath::from_rootfs(&self.host_root, &rp)?;
 
-        if self.contains(&path) {
-            Ok(Some(path))
-        } else {
+        if self.excludes.contains(&path) {
             Ok(None)
+        } else {
+            Ok(Some(path))
         }
+    }
+
+    fn start_monitoring(&self, monitor: &OpenMonitor) {
+        let path = WorkloadPath::from("/").to_rootfs(&self.host_root);
+
+        if let Err(err) = monitor.add_path(&path) {
+            error!("Failed to start monitoring {} for container: {err}", path.display());
+        }
+    }
+
+    fn stop_monitoring(&self, monitor: &OpenMonitor) {
+        let path = WorkloadPath::from("/").to_rootfs(&self.host_root);
+        _ = monitor.remove_path(&path);
+    }
+}
+
+struct PathSet {
+    members: HashMap<WorkloadPath, ()>,
+}
+
+impl PathSet {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            members: HashMap::new(),
+        })
+    }
+
+    fn add(&mut self, path: WorkloadPath) {
+        self.members.insert(path, ());
+    }
+
+    fn contains(&self, path: &WorkloadPath) -> bool {
+        self.members
+            .keys()
+            .any(|f| path.as_raw().starts_with(f.as_raw()))
     }
 
     fn all<'a>(&'a self) -> impl Iterator<Item=&WorkloadPath> + 'a {
