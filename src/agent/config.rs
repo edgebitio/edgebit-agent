@@ -8,7 +8,20 @@ pub const CONFIG_PATH: &str = "/etc/edgebit/config.yaml";
 const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_DOCKER_HOST: &str = "unix:///run/docker.sock";
 
-static DEFAULT_INCLUDES: &[&str] = &["/bin", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/sbin", "/usr"];
+static DEFAULT_HOST_INCLUDES: &[&str] = &[
+    "/bin",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/opt",
+    "/sbin",
+    "/usr"
+];
+
+static DEFAULT_HOST_EXCLUDES: &[&str] = &[];
+
+static DEFAULT_CONTAINER_EXCLUDES: &[&str] = &[];
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,7 +34,9 @@ struct Inner {
 
     host_includes: Option<Vec<String>>,
 
-    container_includes: Option<Vec<String>>,
+    host_excludes: Option<Vec<String>>,
+
+    container_excludes: Option<Vec<String>>,
 
     syft_config: Option<PathBuf>,
 
@@ -106,34 +121,16 @@ impl Config {
         }
     }
 
-    pub fn host_includes(&self) -> Vec<String> {
-        match &self.inner.host_includes {
-            Some(includes) => {
-                includes.iter()
-                    .map(String::clone)
-                    .collect()
-            },
-            None => {
-                DEFAULT_INCLUDES.iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            }
-        }
+    pub fn host_includes(&self) -> Vec<PathBuf> {
+        paths(&self.inner.host_includes, DEFAULT_HOST_INCLUDES)
     }
 
-    pub fn container_includes(&self) -> Vec<String> {
-        match &self.inner.container_includes {
-            Some(includes) => {
-                includes.iter()
-                    .map(String::clone)
-                    .collect()
-            },
-            None => {
-                DEFAULT_INCLUDES.iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            }
-        }
+    pub fn host_excludes(&self) -> Vec<PathBuf> {
+        paths(&self.inner.host_excludes, DEFAULT_HOST_EXCLUDES)
+    }
+
+    pub fn container_excludes(&self) -> Vec<PathBuf> {
+        paths(&self.inner.container_excludes, DEFAULT_CONTAINER_EXCLUDES)
     }
 
     fn try_syft_config(&self) -> Result<PathBuf> {
@@ -199,5 +196,20 @@ impl Config {
                     .to_string_lossy()
                     .into_owned()
             })
+    }
+}
+
+fn paths(lst: &Option<Vec<String>>, def: &[&str]) -> Vec<PathBuf> {
+    match lst {
+        Some(lst) => {
+            lst.iter()
+                .map(|p| p.into())
+                .collect()
+        },
+        None => {
+            def.iter()
+                .map(|s| s.into())
+                .collect()
+        }
     }
 }

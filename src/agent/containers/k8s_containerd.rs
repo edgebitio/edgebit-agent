@@ -1,5 +1,6 @@
 use std::time::{SystemTime, Duration};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use log::*;
@@ -12,6 +13,7 @@ use containerd_client::services::v1::events_client::EventsClient;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::images_client::ImagesClient;
 use containerd_client::services::v1::tasks_client::TasksClient;
+use oci_spec::runtime::Spec;
 
 use containerd_client::events::*;
 use prost::DecodeError;
@@ -21,6 +23,7 @@ use super::{ContainerEventsPtr, ContainerInfo};
 use crate::scoped_path::*;
 
 const NAMESPACE: &str = "k8s.io";
+const OCI_SPEC_TYPE_NAME: &str = "types.containerd.io/opencontainers/runtime-spec/1/Spec";
 
 const CONTAINER_LABEL_KIND: &str = "io.cri-containerd.kind";
 const CONTAINER_LABEL_NAME: &str = "io.kubernetes.container.name";
@@ -72,8 +75,6 @@ impl K8sContainerdTracker {
 
         // Load already running containers
         self.load_running(events.clone()).await?;
-
-        events.flush().await;
 
         if let Err(err) = events_task.await.unwrap() {
             error!("Events streaming: {err}");
@@ -147,7 +148,7 @@ impl K8sContainerdTracker {
         for t in resp.tasks {
             if Status::from_i32(t.status) == Some(Status::Running) {
                 if let Some(info) = containers.remove(&t.id) {
-                    events.add_container(t.id, info);
+                    events.container_started(t.id, info).await;
                 }
             }
         }
@@ -159,7 +160,6 @@ impl K8sContainerdTracker {
         let req = ListContainersRequest{
             filters: Vec::new(),
         };
-
 
         let req = with_namespace!(req, NAMESPACE);
 
@@ -241,6 +241,24 @@ impl K8sContainerdTracker {
         let _pod = c.labels.remove(CONTAINER_LABEL_POD_NAME);
         let _ns = c.labels.remove(CONTAINER_LABEL_NAMESPACE);
 
+        let mounts: Vec<PathBuf> = if let Some(spec) = c.spec {
+            if let Some(oci_spec) = into_oci_spec(spec) {
+                if let Some(mounts) = oci_spec.mounts() {
+                    mounts.iter()
+                        .map(|m| m.destination().clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        debug!("Container (id={}) mounts: {mounts:?}", c.id);
+
         let ci = ContainerInfo{
             name,
             image_id,
@@ -248,6 +266,7 @@ impl K8sContainerdTracker {
             rootfs: Some(get_rootfs(&c.id)),
             start_time: c.created_at.and_then(|t| t.try_into().ok()),
             end_time: None,
+            mounts,
         };
 
         (c.id, ci)
@@ -326,4 +345,15 @@ fn is_container(c: &Container) -> bool {
         Some(kind) => kind == "container",
         None => false,
     }
+}
+
+fn into_oci_spec(spec: Any) -> Option<Spec> {
+    if &spec.type_url == OCI_SPEC_TYPE_NAME {
+        let oci_spec: Spec = serde_json::from_slice(&spec.value).ok()?;
+        if oci_spec.version().starts_with("1.") {
+            return Some(oci_spec);
+        }
+    }
+
+    None
 }

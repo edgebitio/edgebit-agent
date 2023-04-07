@@ -30,6 +30,7 @@ uuid = { version = "1.3.0", features = ["v4"] }
 bollard = "0.14"
 podman-api = "0.9"
 containerd-client = { git = "https://github.com/containerd/rust-extensions.git", rev = "ba111e55aaf3829964730287ae9f96d0088b4c18" }
+oci-spec = "0.6"
 lazy_static = "1.4"
 regex = "1.7"
 fanotify-rs = { git = "https://github.com/eyakubovich/fanotify-rs.git", rev = "aca76327e9c1550057e831275354d00104222b3a" }

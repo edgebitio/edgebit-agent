@@ -64,8 +64,6 @@ impl PodmanTracker {
         // Load already running containers
         load_running(&podman, events.clone()).await?;
 
-        events.flush().await;
-
         _ = events_task.await;
 
         Ok(())
@@ -139,7 +137,7 @@ async fn load_running(podman: &Podman, events: ContainerEventsPtr) -> Result<()>
         match inspect_container(podman, &id).await {
             Ok(info) => {
                 debug!("Container {id}: {info:?}");
-                events.add_container(id, info);
+                events.container_started(id, info).await;
             },
             Err(err) => {
                 error!("Podman inspect_container({id}): {err}");
@@ -191,6 +189,12 @@ async fn inspect_container(podman: &Podman, id: &str) -> Result<ContainerInfo> {
         None => (None, None)
     };
 
+    let mounts = cont_resp.mounts
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| m.destination.map(|d| d.into()))
+        .collect();
+
     Ok(ContainerInfo{
         name: cont_resp.name,
         image_id: cont_resp.image,
@@ -198,5 +202,6 @@ async fn inspect_container(podman: &Podman, id: &str) -> Result<ContainerInfo> {
         rootfs,
         start_time,
         end_time,
+        mounts,
     })
 }
