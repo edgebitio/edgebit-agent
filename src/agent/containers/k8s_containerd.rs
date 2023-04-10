@@ -4,14 +4,14 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use log::*;
+use serde::Deserialize;
 use tonic::transport::channel::Channel;
 use tonic::Request;
 use containerd_client::with_namespace;
-use containerd_client::services::v1::{SubscribeRequest, ListTasksRequest, GetContainerRequest, Container, ListContainersRequest, GetImageRequest};
+use containerd_client::services::v1::{SubscribeRequest, ListTasksRequest, GetContainerRequest, Container, ListContainersRequest};
 use containerd_client::types::v1::Status;
 use containerd_client::services::v1::events_client::EventsClient;
 use containerd_client::services::v1::containers_client::ContainersClient;
-use containerd_client::services::v1::images_client::ImagesClient;
 use containerd_client::services::v1::tasks_client::TasksClient;
 use oci_spec::runtime::Spec;
 
@@ -30,12 +30,14 @@ const CONTAINER_LABEL_NAME: &str = "io.kubernetes.container.name";
 const CONTAINER_LABEL_POD_NAME: &str = "io.kubernetes.pod.name";
 const CONTAINER_LABEL_NAMESPACE: &str = "io.kubernetes.pod.namespace";
 
+const CRI_CONTAINERD_CONTAINER_METADATA: &str = "io.cri-containerd.container.metadata";
+const CRI_CONTAINERD_CONTAINER_METADATA_TYPE: &str = "github.com/containerd/cri/pkg/store/container/Metadata";
+
 #[derive(Clone)]
 pub struct K8sContainerdTracker {
     containers: ContainersClient<Channel>,
     tasks: TasksClient<Channel>,
     events: EventsClient<Channel>,
-    images: ImagesClient<Channel>,
 }
 
 impl K8sContainerdTracker {
@@ -64,7 +66,6 @@ impl K8sContainerdTracker {
             containers: ContainersClient::new(ch.clone()),
             tasks: TasksClient::new(ch.clone()),
             events: EventsClient::new(ch.clone()),
-            images: ImagesClient::new(ch.clone()),
         }
     }
 
@@ -206,33 +207,18 @@ impl K8sContainerdTracker {
         }
     }
 
-    async fn get_image_digest(&mut self, name: &str) -> Result<String> {
-        let req = GetImageRequest{
-            name: name.into(),
-        };
-
-        let req = with_namespace!(req, NAMESPACE);
-
-        let resp = self.images.get(req)
-            .await?
-            .into_inner();
-
-        if let Some(image) = resp.image {
-            if let Some(target) = image.target {
-                return Ok(target.digest);
-            }
-        }
-
-        Err(anyhow!("digest missing for image {name}"))
-    }
-
     async fn into_container_info(&mut self, mut c: Container) -> (String, ContainerInfo) {
-        let image_id = match self.get_image_digest(&c.image).await {
-            Ok(digest) => Some(digest),
-            Err(err) => {
-                error!("Failed to get digest: {err}");
-                None
+        let image_id = if let Some(meta) = c.extensions.remove(CRI_CONTAINERD_CONTAINER_METADATA) {
+            match into_cri_metadata(meta) {
+                Ok(meta) => Some(meta.metadata.image_ref),
+                Err(err) => {
+                    error!("Failed to decode {CRI_CONTAINERD_CONTAINER_METADATA} extension: {err}");
+                    None
+                }
             }
+        } else {
+            error!("Container {}: {} extension missing", c.id, CRI_CONTAINERD_CONTAINER_METADATA);
+            None
         };
 
         let name = c.labels.remove(CONTAINER_LABEL_NAME);
@@ -356,4 +342,33 @@ fn into_oci_spec(spec: Any) -> Option<Spec> {
     }
 
     None
+}
+
+#[derive(Deserialize)]
+struct CriMetadata {
+    #[serde(rename = "Version")]
+    version: String,
+
+    #[serde(rename = "Metadata")]
+    metadata: Metadata,
+}
+
+#[derive(Deserialize)]
+struct Metadata {
+    #[serde(rename = "ImageRef")]
+    image_ref: String,
+}
+
+fn into_cri_metadata(any: Any) -> Result<CriMetadata> {
+    if any.type_url != CRI_CONTAINERD_CONTAINER_METADATA_TYPE {
+        return Err(anyhow!("unexpected CRI metadata extension type: {} instead of {CRI_CONTAINERD_CONTAINER_METADATA_TYPE}", any.type_url));
+    }
+
+    let meta: CriMetadata = serde_json::from_slice(&any.value)?;
+
+    if meta.version != "v1" {
+        return Err(anyhow!("unexpected CRI metadata version: {}", meta.version));
+    }
+
+    Ok(meta)
 }

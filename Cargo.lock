@@ -507,6 +507,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "base64 0.21.0",
  "bollard",
  "bytemuck",
  "bytes 1.4.0",

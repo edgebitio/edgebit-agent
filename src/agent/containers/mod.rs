@@ -160,7 +160,7 @@ pub trait ContainerRuntimeEvents {
 #[async_trait]
 impl ContainerRuntimeEvents for Inner {
     async fn container_started(&self, id: String, info: ContainerInfo) {
-        debug!("Container started {id}: {info:?}");
+        info!("Container started {id}: {info:?}");
 
         self.cont_map.lock()
             .unwrap()
@@ -170,7 +170,7 @@ impl ContainerRuntimeEvents for Inner {
     }
 
     async fn container_stopped(&self, id: String, stop_time: SystemTime) {
-        debug!("Container {id} stopped");
+        info!("Container {id} stopped");
 
         // TODO: it's racy to rely on the cont_map to have the info since
         // if this is called before load_running, it may not be there.

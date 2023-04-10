@@ -21,7 +21,7 @@ const BASEOS_ID_PATH: &str = "/var/lib/edgebit/baseos-id";
 
 const OS_RELEASE_PATHS: [&str; 2] = ["etc/os-release", "usr/lib/os-release"];
 
-const OPEN_EVENT_LAG: Duration = Duration::from_secs(1);
+const OPEN_EVENT_LAG: Duration = Duration::from_millis(500);
 
 pub enum Event {
     ContainerStarted(String, ContainerInfo),
@@ -141,7 +141,7 @@ async fn service_open_event_queue(inner: Arc<Inner>) {
             handle_open_event(&inner, item.evt).await;
         }
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -166,6 +166,7 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
                     },
                     Ok(None) => return,
                     Err(err) => {
+                        debug!("{}: {err}", evt.filename.display());
                         resolve_failed(&evt.filename, err);
                         return;
                     }
@@ -214,7 +215,7 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
                     let mut excludes = inner.config.container_excludes();
                     excludes.append(&mut info.mounts);
 
-                    match ContainerWorkload::new(rootfs, &inner.config.container_excludes()) {
+                    match ContainerWorkload::new(rootfs, &excludes) {
                         Ok(workload) => {
                             workload.start_monitoring(&inner.open_monitor);
 
@@ -359,43 +360,48 @@ fn uuid_string() -> String {
         .to_string()
 }
 struct ContainerWorkload {
-    host_root: RootFsPath,
+    root: RootFsPath,
     excludes: PathSet,
 }
 
 impl ContainerWorkload {
-    fn new(host_root: RootFsPath, excludes: &[PathBuf]) -> Result<Self> {
+    fn new(root: RootFsPath, excludes: &[PathBuf]) -> Result<Self> {
         let mut exclude_set = PathSet::new()?;
         for path in excludes {
             let path = WorkloadPath::from(path);
-            match path.realpath(&host_root) {
-                Ok(path) => exclude_set.add(path),
+            match path.realpath(&root) {
+                Ok(path) => {
+                    trace!("Excluding container path {}", path.display());
+                    exclude_set.add(path);
+                },
                 Err(err) => {
                     // ignore "no such file or directory" erros
                     if !is_not_found(&err) {
-                        error!("Failed to add a watch for {}: {err}", path.display());
+                        error!("Failed to get realpath for {}: {err}", path.display());
                     }
                 }
             };
         }
 
         Ok(Self{
-            host_root,
+            root,
             excludes: exclude_set,
         })
     }
 
     fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
-        let rp = path.to_rootfs(&self.host_root)
+        let rp = path.to_rootfs(&self.root)
             .realpath()?;
 
         if !is_file(&rp) {
+            debug!("{} is not a file", rp.display());
             return Ok(None);
         }
 
-        let path = WorkloadPath::from_rootfs(&self.host_root, &rp)?;
+        let path = WorkloadPath::from_rootfs(&self.root, &rp)?;
 
         if self.excludes.contains(&path) {
+            debug!("{} was excluded", path.display());
             Ok(None)
         } else {
             Ok(Some(path))
@@ -403,7 +409,7 @@ impl ContainerWorkload {
     }
 
     fn start_monitoring(&self, monitor: &OpenMonitor) {
-        let path = WorkloadPath::from("/").to_rootfs(&self.host_root);
+        let path = WorkloadPath::from("/").to_rootfs(&self.root);
 
         if let Err(err) = monitor.add_path(&path) {
             error!("Failed to start monitoring {} for container: {err}", path.display());
@@ -411,7 +417,7 @@ impl ContainerWorkload {
     }
 
     fn stop_monitoring(&self, monitor: &OpenMonitor) {
-        let path = WorkloadPath::from("/").to_rootfs(&self.host_root);
+        let path = WorkloadPath::from("/").to_rootfs(&self.root);
         _ = monitor.remove_path(&path);
     }
 }
