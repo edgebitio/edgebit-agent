@@ -2,8 +2,8 @@
 
 arch=$(uname -m)
 
-: "${VERSION:=0.2.0}"
-: "${TARBALL_URL:=https://install.edgebit.io/edgebit-agent-${VERSION}.${arch}.tar.gz}"
+: "${VERSION:=0.3.0}"
+: "${TARBALL_URL:=https://github.com/edgebitio/edgebit-agent/releases/download/v${VERSION}/edgebit-agent-${VERSION}.${arch}.tar.gz}"
 : "${PREFIX:=/opt}"
 : "${EDGEBIT_CONFIG:=/etc/edgebit/config.yaml}"
 
@@ -85,7 +85,7 @@ echo "Downloading and extracting agent"
 if [ -f "$TARBALL_URL" ]; then
 	tar xzf "$TARBALL_URL"
 else
-	curl -s "$TARBALL_URL" | tar xz
+	curl -sL "$TARBALL_URL" | tar xz
 fi
 
 mkdir -p /etc/edgebit
