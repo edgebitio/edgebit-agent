@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           # Make sure the tag is on main branch
-          git merge-base --is-ancestor ${{ github.ref_name }} main
+          git merge-base --is-ancestor ${{ github.ref_name }} origin/main
           git tag -s -f -m "${{ github.ref_name }}" ${{ github.ref_name }}
           git push -f origin ${{ github.ref_name }}
 
