@@ -29,14 +29,18 @@ jobs:
           git tag -s -f -m "${{ github.ref_name }}" ${{ github.ref_name }}
           git push -f origin ${{ github.ref_name }}
 
-  release-binaries:
+  draft-release:
     needs: sign-tag
 
     strategy:
       matrix:
-        runs-on: [buildjet-4vcpu-ubuntu-2204, buildjet-4vcpu-ubuntu-2204-arm]
+        include:
+          - runner: buildjet-4vcpu-ubuntu-2204
+            arch: amd64
+          - runner: buildjet-4vcpu-ubuntu-2204-arm
+            arch: arm64
 
-    runs-on: ${{matrix.runs-on}}
+    runs-on: ${{matrix.runner}}
 
     steps:
       - uses: actions/checkout@v3
@@ -66,11 +70,7 @@ jobs:
           images: |
             public.ecr.aws/edgebit/edgebit-agent
           tags: |
-            type=sha,
-            type=semver,pattern=v{{major}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}.{{minor}}.{{patch}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}}.{{patch}}-${{ matrix.arch }}
 
       - name: Building agent
         uses: docker/build-push-action@v3
@@ -97,3 +97,33 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: |
             dist/output/edgebit-agent*
+
+  docker-combine:
+    needs: draft-release
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate Image Metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            public.ecr.aws/edgebit/edgebit-agent
+          tags: |
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}}.{{patch}}
+
+      - name: Combine into multi-arch
+        shell: bash
+        run: |
+          input="${{ steps.meta.outputs.tags }}"
+
+          for tag in $input; do
+            tags="$tags --tag $tag"
+          done
+
+          echo docker buildx imagetools create --dry-run \
+            $tags \
+            public.ecr.aws/edgebit/edgebit-agent:${{ steps.meta.outputs.version}}-amd64 \
+            public.ecr.aws/edgebit/edgebit-agent:${{ steps.meta.outputs.version}}-arm64
