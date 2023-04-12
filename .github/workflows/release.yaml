@@ -123,7 +123,7 @@ jobs:
             tags="$tags --tag $tag"
           done
 
-          echo docker buildx imagetools create --dry-run \
+          docker buildx imagetools create \
             $tags \
             public.ecr.aws/edgebit/edgebit-agent:${{ steps.meta.outputs.version}}-amd64 \
             public.ecr.aws/edgebit/edgebit-agent:${{ steps.meta.outputs.version}}-arm64
