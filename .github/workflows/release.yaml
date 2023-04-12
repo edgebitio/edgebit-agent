@@ -70,7 +70,9 @@ jobs:
           images: |
             public.ecr.aws/edgebit/edgebit-agent
           tags: |
-            type=semver,pattern={{major}}.{{minor}}.{{patch}}-${{ matrix.arch }}
+            type=semver,pattern={{major}}.{{minor}}-${{ matrix.arch }}
+          flavor: |
+            latest=false
 
       - name: Building agent
         uses: docker/build-push-action@v3
