@@ -57,6 +57,7 @@ impl Registry {
     }
 }
 
+#[derive(Debug)]
 pub struct PkgRef {
     pub id: String,
     pub filenames: Vec<WorkloadPath>,

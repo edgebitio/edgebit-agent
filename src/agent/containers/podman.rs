@@ -178,13 +178,18 @@ async fn inspect_container(podman: &Podman, id: &str) -> Result<ContainerInfo> {
 
     let (start_time, end_time) = match cont_resp.state {
         Some(state) => {
-            let started = state.started_at
+            let started_at = state.started_at
                 .map(|t| t.into());
 
-            let finished = state.finished_at
-                .map(|t| t.into());
+            let finished_at = match state.status.as_deref() {
+                Some("running") | Some("paused") => None,
+                _ => {
+                    state.finished_at
+                        .map(|t| t.into())
+                }
+            };
 
-            (started, finished)
+            (started_at, finished_at)
         },
         None => (None, None)
     };
