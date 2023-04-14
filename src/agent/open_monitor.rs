@@ -156,7 +156,11 @@ struct ProcessInfo {
 
 impl ProcessInfo {
     fn cgroup_path(&self) -> Result<&str> {
-        let cg = std::str::from_utf8(&self.cgroup)
+        let nul = self.cgroup.iter()
+            .position(|b| *b == 0u8)
+            .unwrap_or(self.cgroup.len());
+
+        let cg = std::str::from_utf8(&self.cgroup[..nul])
             .map_err(|_| anyhow!("cgroup name with non-UTF8 characters"))?;
 
         Ok(cg)

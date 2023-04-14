@@ -41,6 +41,7 @@ realpath-ext = "0.1.2"
 async-trait = "0.1.66"
 nix = { version = "0.26", features = ["resource", "fs"] }
 tokio-pipe = "0.2.12"
+lru = "0.10.0"
 
 [build-dependencies]
 tonic-build = "0.8"

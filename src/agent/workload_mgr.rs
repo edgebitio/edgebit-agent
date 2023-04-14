@@ -3,12 +3,14 @@ use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, VecDeque};
 use std::path::{PathBuf};
 use std::time::{Instant, Duration};
+use std::num::NonZeroUsize;
 
 use anyhow::{Result};
 use log::*;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+use lru::LruCache;
 
 use crate::config::Config;
 use crate::registry::{Registry, PkgRef};
@@ -23,6 +25,9 @@ const OS_RELEASE_PATHS: [&str; 2] = ["etc/os-release", "usr/lib/os-release"];
 
 const OPEN_EVENT_LAG: Duration = Duration::from_millis(500);
 
+const REPORTED_LRU_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(256) };
+
+#[derive(Debug)]
 pub enum Event {
     ContainerStarted(String, ContainerInfo),
     ContainerStopped(String, ContainerInfo),
@@ -151,12 +156,17 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
 
     let in_use = match inner.containers.id_from_cgroup(&cgroup) {
         Some(id) => {
-            trace!("Container match: {id}");
+            trace!("Container match: {id} for {}", evt.filename.display());
 
-            let container_workloads = inner.container_workloads.lock().unwrap();
-            if let Some(ref workload) = container_workloads.get(&id) {
+            let mut container_workloads = inner.container_workloads.lock().unwrap();
+            if let Some(workload) = container_workloads.get_mut(&id) {
                 match workload.resolve(&evt.filename) {
                     Ok(Some(filepath)) => {
+                        if workload.check_and_mark_reported(filepath.clone()) {
+                            // already reported, no need to do it again
+                            return;
+                        }
+
                         let pkg = PkgRef{
                             id: String::new(),
                             filenames: vec![filepath],
@@ -177,10 +187,15 @@ async fn handle_open_event(inner: &Inner, evt: OpenEvent) {
             }
         },
         None => {
-            let host_workload = inner.host_workload.lock().unwrap();
+            let mut host_workload = inner.host_workload.lock().unwrap();
 
             match host_workload.resolve(&evt.filename) {
                 Ok(Some(filepath)) => {
+                    if host_workload.check_and_mark_reported(filepath.clone()) {
+                        // already reported, no need to do it again
+                        return;
+                    }
+
                     let filenames = vec![filepath];
                     let pkgs = host_workload.pkgs.get_packages(filenames);
 
@@ -259,6 +274,7 @@ pub struct HostWorkload {
     pkgs: Registry,
     host_root: RootFsPath,
     includes: PathSet,
+    reported: LruCache<WorkloadPath, ()>,
 }
 
 impl HostWorkload {
@@ -299,6 +315,7 @@ impl HostWorkload {
             pkgs: Registry::from_sbom(&sbom, &host_root)?,
             host_root,
             includes,
+            reported: LruCache::new(REPORTED_LRU_SIZE),
         })
     }
 
@@ -336,6 +353,11 @@ impl HostWorkload {
             Ok(None)
         }
     }
+
+    // Returns true if the file was already reported
+    fn check_and_mark_reported(&mut self, filename: WorkloadPath) -> bool {
+        self.reported.put(filename, ()).is_some()
+    }
 }
 
 fn load_baseos_id() -> String {
@@ -362,6 +384,7 @@ fn uuid_string() -> String {
 struct ContainerWorkload {
     root: RootFsPath,
     excludes: PathSet,
+    reported: LruCache<WorkloadPath, ()>,
 }
 
 impl ContainerWorkload {
@@ -386,6 +409,7 @@ impl ContainerWorkload {
         Ok(Self{
             root,
             excludes: exclude_set,
+            reported: LruCache::new(REPORTED_LRU_SIZE),
         })
     }
 
@@ -419,6 +443,11 @@ impl ContainerWorkload {
     fn stop_monitoring(&self, monitor: &OpenMonitor) {
         let path = WorkloadPath::from("/").to_rootfs(&self.root);
         _ = monitor.remove_path(&path);
+    }
+
+    // Returns true if the file was already reported
+    fn check_and_mark_reported(&mut self, filename: WorkloadPath) -> bool {
+        self.reported.put(filename, ()).is_some()
     }
 }
 

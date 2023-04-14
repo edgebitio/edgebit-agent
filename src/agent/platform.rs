@@ -115,6 +115,7 @@ impl Client {
             workload_id,
         };
 
+        trace!("ReportInUse: {req:?}");
         self.inventory_svc.report_in_use(req).await?;
         Ok(())
     }

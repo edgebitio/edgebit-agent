@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use log::*;
 use bollard::{Docker};
 use bollard::system::EventsOptions;
-use bollard::models::{EventMessage, EventMessageTypeEnum};
+use bollard::models::{EventMessage, EventMessageTypeEnum, ContainerStateStatusEnum};
 use bollard::container::ListContainersOptions;
 use futures::stream::StreamExt;
 use lazy_static::lazy_static;
@@ -205,18 +205,22 @@ async fn inspect_container(docker: &Docker, id: &str) -> Result<ContainerInfo> {
         Some(state) => {
             // Convert from ISO 8601 string to SystemTime
 
-            let started = state.started_at
+            let started_at = state.started_at
                 .map(|t| t.parse::<DateTime<Utc>>().ok())
                 .flatten()
                 .map(|t| t.into());
 
-            let finished = state.finished_at
-                .map(|t| t.parse::<DateTime<Utc>>().ok())
-                .flatten()
-                .filter(|t| t > &DT_UNIX_EPOCH)
-                .map(|t| t.into());
+            let finished_at = match state.status {
+                Some(ContainerStateStatusEnum::RUNNING) | Some(ContainerStateStatusEnum::PAUSED) => None,
+                _ => {
+                    state.finished_at .map(|t| t.parse::<DateTime<Utc>>().ok())
+                        .flatten()
+                        .filter(|t| t > &DT_UNIX_EPOCH)
+                        .map(|t| t.into())
+                }
+            };
 
-            (started, finished)
+            (started_at, finished_at)
         },
         None => (None, None)
     };

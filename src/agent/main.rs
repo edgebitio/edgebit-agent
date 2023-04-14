@@ -11,8 +11,9 @@ pub mod scoped_path;
 pub mod chroot_cmd;
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration};
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use log::*;
@@ -26,6 +27,7 @@ use containers::ContainerInfo;
 use workload_mgr::{WorkloadManager, Event, HostWorkload};
 use version::VERSION;
 use scoped_path::*;
+use registry::PkgRef;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -125,17 +127,23 @@ async fn run(args: &CliArgs) -> Result<()> {
 }
 
 async fn report_in_use(client: &mut platform::Client, mut events: Receiver<Event>) {
+    let mut in_use = InUseReporter::new();
+
+    let mut periods = tokio::time::interval(Duration::from_millis(1000));
+
     loop {
-        match events.recv().await {
-            Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
-            Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
-            Some(Event::PackageInUse(id, pkgs)) => {
-                debug!("report-in-use: [{id}]: {}: {:?}", pkgs[0].id, pkgs[0].filenames);
-                if let Err(err) = client.report_in_use(id, pkgs).await {
-                    error!("Failed to report-in-use: {err}");
+        tokio::select!{
+            evt = events.recv() => {
+                match evt {
+                    Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
+                    Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
+                    Some(Event::PackageInUse(id, pkgs)) => in_use.add(id, pkgs),
+                    None => break,
                 }
             },
-            None => break,
+            _ = periods.tick() => {
+                in_use.flush(client).await
+            }
         }
     }
 }
@@ -206,4 +214,30 @@ async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: Strin
     let f = std::fs::File::open(path)?;
     client.upload_sbom(image_id, f).await?;
     Ok(())
+}
+
+struct InUseReporter {
+    batches: HashMap<String, Vec<PkgRef>>,
+}
+
+impl InUseReporter {
+    fn new() -> Self {
+        Self{
+            batches: HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, workload_id: String, mut pkgs: Vec<PkgRef>) {
+        self.batches.entry(workload_id)
+            .or_insert(Vec::new())
+            .append(&mut pkgs);
+    }
+
+    async fn flush(&mut self, client: &mut platform::Client) {
+        for (id, pkgs) in self.batches.drain() {
+            if let Err(err) = client.report_in_use(id, pkgs).await {
+                error!("Failed to report-in-use: {err}");
+            }
+        }
+    }
 }
