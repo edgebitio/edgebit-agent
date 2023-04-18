@@ -87,6 +87,15 @@ impl InventoryService for Service {
         }
     }
 
+    async fn reset_workloads(
+        &self,
+        request: Request<pb::ResetWorkloadsRequest>,
+    ) -> Result<Response<pb::ResetWorkloadsResponse>, Status> {
+
+        println!("reset_workloads: {:?}", request);
+        Ok(Response::new(pb::ResetWorkloadsResponse{}))
+    }
+
     async fn upsert_workload(
         &self,
         request: Request<pb::UpsertWorkloadRequest>,

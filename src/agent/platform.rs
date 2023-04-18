@@ -120,6 +120,11 @@ impl Client {
         Ok(())
     }
 
+    pub async fn reset_workloads(&mut self) -> Result<()> {
+        self.inventory_svc.reset_workloads(pb::ResetWorkloadsRequest{}).await?;
+        Ok(())
+    }
+
     pub async fn stop(self) {
         self.sess_keeper_task.abort();
         _ = self.sess_keeper_task.await;

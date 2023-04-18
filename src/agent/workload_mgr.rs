@@ -267,7 +267,7 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
 
 pub struct HostWorkload {
     pub id: String,
-    pub group: Vec<String>,
+    pub labels: Vec<String>,
     pub hostname: String,
     pub os_pretty_name: String,
     pub image_id: String,
@@ -308,7 +308,7 @@ impl HostWorkload {
 
         Ok(Self{
             id,
-            group: Vec::new(),
+            labels: Vec::new(),
             hostname,
             os_pretty_name,
             image_id: sbom.id(),
