@@ -19,6 +19,7 @@ use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
 use tokio::sync::mpsc::{Receiver};
+use prost_types::Timestamp;
 
 use config::Config;
 use sbom::Sbom;
@@ -28,6 +29,11 @@ use workload_mgr::{WorkloadManager, Event, HostWorkload};
 use version::VERSION;
 use scoped_path::*;
 use registry::PkgRef;
+
+const TIMESTAMP_INFINITY: Timestamp = Timestamp {
+    seconds: 4134009600, // 2101-01-01
+    nanos: 0,
+};
 
 #[derive(Parser)]
 struct CliArgs {
@@ -111,6 +117,8 @@ async fn run(args: &CliArgs) -> Result<()> {
         },
     };
 
+    client.reset_workloads().await?;
+
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
     let host_wrkld = HostWorkload::new(sbom, config.clone(), host_root.clone(), hostname)?;
     let host_wrkld_req = to_upsert_workload_req(&host_wrkld);
@@ -152,7 +160,7 @@ fn to_upsert_workload_req(workload: &HostWorkload) -> pb::UpsertWorkloadRequest 
     pb::UpsertWorkloadRequest {
         workload_id: workload.id.clone(),
         workload: Some(pb::Workload{
-            group: workload.group.clone(),
+            labels: Vec::new(),
             kind: Some(pb::workload::Kind::Host(pb::Host{
                 hostname: workload.hostname.clone(),
                 instance: String::new(),
@@ -175,13 +183,13 @@ async fn handle_container_started(client: &mut platform::Client, id: String, inf
     let res = client.upsert_workload(pb::UpsertWorkloadRequest{
             workload_id: id,
             workload: Some(pb::Workload{
-                group: Vec::new(),
+                labels: Vec::new(),
                 kind: Some(pb::workload::Kind::Container(pb::Container{
                     name: info.name.unwrap_or(String::new()),
                 })),
             }),
             start_time: info.start_time.map(|t| t.into()),
-            end_time: None,
+            end_time: Some(TIMESTAMP_INFINITY),
             image_id: info.image_id.unwrap_or(String::new()),
             image: Some(pb::Image{
                 kind: Some(pb::image::Kind::Docker(pb::DockerImage{

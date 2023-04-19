@@ -100,7 +100,6 @@ impl Containers {
 
                             Err(err) => error!("Failed to connect to podman: {err}"),
                         }
-
                     },
                     _ => {
                         if let Err(err) = tracker.track(ev.clone()).await {
