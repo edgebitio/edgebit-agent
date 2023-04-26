@@ -43,7 +43,7 @@ struct Inner {
     config: Arc<Config>,
     host_root: RootFsPath,
     containers: Containers,
-    open_monitor: OpenMonitor,
+    open_monitor: Option<OpenMonitor>,
     host_workload: Mutex<HostWorkload>,
     container_workloads: Mutex<HashMap<String, ContainerWorkload>>,
     events: Sender<Event>,
@@ -59,9 +59,14 @@ pub struct WorkloadManager {
 impl WorkloadManager {
     pub fn start(config: Arc<Config>, host_root: &RootFsPath, host_workload: HostWorkload, events: Sender<Event>) -> Result<Self> {
         let (open_tx, open_rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
-        let open_monitor = OpenMonitor::start(open_tx)?;
-
-        host_workload.start_monitoring(&open_monitor);
+        let open_monitor = if config.pkg_tracking() {
+            let open_monitor = OpenMonitor::start(open_tx)?;
+            host_workload.start_monitoring(&open_monitor);
+            Some(open_monitor)
+        } else {
+            info!("In-use package tracking is disabled");
+            None
+        };
 
         let (cont_tx, cont_rx) = tokio::sync::mpsc::channel::<ContainerEvent>(10);
         let mut containers = Containers::new(cont_tx);
@@ -232,7 +237,9 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
 
                     match ContainerWorkload::new(rootfs, &excludes) {
                         Ok(workload) => {
-                            workload.start_monitoring(&inner.open_monitor);
+                            if let Some(ref open_mon) = inner.open_monitor {
+                                workload.start_monitoring(open_mon);
+                            }
 
                             inner.container_workloads
                                 .lock()
@@ -255,7 +262,9 @@ async fn handle_container_event(inner: &Inner, evt: ContainerEvent) {
                 .remove(&id);
 
             if let Some(workload) = workload {
-                workload.stop_monitoring(&inner.open_monitor);
+                if let Some(ref open_mon) = inner.open_monitor {
+                    workload.stop_monitoring(open_mon);
+                }
             }
 
             if let Err(err) = inner.events.send(Event::ContainerStopped(id, info)).await {

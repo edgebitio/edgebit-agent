@@ -184,7 +184,7 @@ impl TryFrom<&[u8]> for ProcessInfo {
 pub struct OpenMonitor {
     fan: Arc<Fanotify>,
     fan_task: JoinHandle<()>,
-    probes: BpfProbes,
+    _probes: BpfProbes,
     zombie_task: JoinHandle<Result<()>>,
     opens_task: JoinHandle<Result<()>>,
 }
@@ -221,7 +221,7 @@ impl OpenMonitor {
         Ok(Self {
             fan,
             fan_task,
-            probes,
+            _probes: probes,
             zombie_task,
             opens_task,
         })
@@ -233,6 +233,9 @@ impl OpenMonitor {
 
         self.zombie_task.abort();
         _ = self.zombie_task.await;
+
+        self.opens_task.abort();
+        _ = self.opens_task.await;
     }
 
     // NB: Adds the mountpoint of path, not the actual path.

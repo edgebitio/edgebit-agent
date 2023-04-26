@@ -47,6 +47,8 @@ struct Inner {
     containerd_host: Option<String>,
 
     hostname: Option<String>,
+
+    pkg_tracking: Option<bool>,
 }
 
 // TODO: probably worth using Figment or similar to unify yaml and env vars
@@ -59,9 +61,11 @@ impl Config {
         let mut inner: Inner = match std::fs::File::open(path.as_ref()) {
             Ok(file) => serde_yaml::from_reader(file)?,
             Err(err) => {
-                // Don't bail since the config can also be provided via env vars.
-                // Do print a warning.
-                eprintln!("Could not open config file at {}, {err}", path.as_ref().display());
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    // Don't bail since the config can also be provided via env vars.
+                    // Do print a warning.
+                    eprintln!("Could not open config file at {}, {err}", path.as_ref().display());
+                }
                 Inner::default()
             }
         };
@@ -197,6 +201,16 @@ impl Config {
                     .into_owned()
             })
     }
+
+    pub fn pkg_tracking(&self) -> bool {
+        self.inner.pkg_tracking
+            .or_else(|| {
+                std::env::var("EDGEBIT_PKG_TRACKING")
+                    .ok()
+                    .map(|v| is_yes(&v))
+            })
+            .unwrap_or(true)
+    }
 }
 
 fn paths(lst: &Option<Vec<String>>, def: &[&str]) -> Vec<PathBuf> {
@@ -212,4 +226,9 @@ fn paths(lst: &Option<Vec<String>>, def: &[&str]) -> Vec<PathBuf> {
                 .collect()
         }
     }
+}
+
+fn is_yes(val: &str) -> bool {
+    let val = val.to_lowercase();
+    val == "1" || val == "yes" || val == "true"
 }
