@@ -46,9 +46,11 @@ struct Inner {
 
     containerd_host: Option<String>,
 
+    pkg_tracking: Option<bool>,
+
     hostname: Option<String>,
 
-    pkg_tracking: Option<bool>,
+    host_root: Option<PathBuf>,
 }
 
 // TODO: probably worth using Figment or similar to unify yaml and env vars
@@ -57,7 +59,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load<P: AsRef<Path>>(path: P, hostname: Option<String>) -> Result<Self> {
+    pub fn load<P: AsRef<Path>>(path: P, hostname: Option<String>, host_root: Option<PathBuf>) -> Result<Self> {
         let mut inner: Inner = match std::fs::File::open(path.as_ref()) {
             Ok(file) => serde_yaml::from_reader(file)?,
             Err(err) => {
@@ -71,6 +73,7 @@ impl Config {
         };
 
         inner.hostname = hostname;
+        inner.host_root = host_root;
 
         let me = Self{
             inner,
@@ -201,6 +204,17 @@ impl Config {
                     .into_owned()
             })
     }
+
+    pub fn host_root(&self) -> PathBuf {
+        self.inner.host_root
+            .clone()
+            .or_else(|| std::env::var("EDGEBIT_HOSTROOT")
+                            .ok()
+                            .map(|p| PathBuf::from(p))
+                        )
+            .unwrap_or(PathBuf::from("/"))
+    }
+
 
     pub fn pkg_tracking(&self) -> bool {
         self.inner.pkg_tracking

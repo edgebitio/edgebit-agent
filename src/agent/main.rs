@@ -5,7 +5,7 @@ pub mod sbom;
 pub mod registry;
 pub mod containers;
 pub mod fanotify;
-pub mod workload_mgr;
+pub mod workloads;
 pub mod version;
 pub mod scoped_path;
 pub mod chroot_cmd;
@@ -13,7 +13,6 @@ pub mod chroot_cmd;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, Duration};
 use std::sync::Arc;
-use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use log::*;
@@ -24,11 +23,14 @@ use prost_types::Timestamp;
 use config::Config;
 use sbom::Sbom;
 use platform::pb;
-use containers::ContainerInfo;
-use workload_mgr::{WorkloadManager, Event, HostWorkload};
+use containers::{Containers, ContainerInfo};
+use workloads::{Workloads, Event};
+use workloads::host::HostWorkload;
 use version::VERSION;
 use scoped_path::*;
-use registry::PkgRef;
+
+use crate::open_monitor::{FileOpenMonitorArc, OpenMonitor, NullOpenMonitor, OpenEvent};
+use crate::workloads::track_container_lifecycle;
 
 const TIMESTAMP_INFINITY: Timestamp = Timestamp {
     seconds: 4134009600, // 2101-01-01
@@ -69,7 +71,7 @@ async fn run(args: &CliArgs) -> Result<()> {
         None => PathBuf::from(config::CONFIG_PATH),
     };
 
-    let config = Config::load(config_path, args.hostname.clone())
+    let config = Config::load(config_path, args.hostname.clone(), args.host_root.clone())
         .map_err(|err| anyhow!("Error loading config file: {err}"))?;
 
     let config = Arc::new(config);
@@ -81,62 +83,62 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     let url = config.edgebit_url();
     let token = config.edgebit_id();
-    let host_root: RootFsPath = args.host_root.clone()
-        .unwrap_or("/".into())
-        .into();
-    let hostname = config.hostname();
 
     info!("Connecting to EdgeBit at {url}");
     let mut client = platform::Client::connect(
         url.try_into()?,
         token.try_into()?,
-        hostname.clone(),
+        config.hostname(),
     ).await?;
 
-    let sbom = match &args.sbom {
-        Some(sbom_path) => {
-            info!("Loading SBOM");
-            let sbom = Sbom::load(&sbom_path.into())?;
-
-            if !args.no_sbom_upload {
-                upload_sbom(&mut client, sbom_path, sbom.id()).await?;
-            }
-
-            sbom
-        },
-        None => {
-            info!("Generating SBOM");
-            let tmp_file = sbom::generate(config.clone(), &host_root).await?;
-            let sbom = Sbom::load(&tmp_file.path().into())?;
-
-            if !args.no_sbom_upload {
-                upload_sbom(&mut client, tmp_file.path(), sbom.id()).await?;
-            }
-
-            sbom
-        },
-    };
+    let sbom = load_sbom(&args, config.clone(), &mut client).await?;
 
     client.reset_workloads().await?;
 
+    let (open_mon, open_rx) = if config.pkg_tracking() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
+        let mon: FileOpenMonitorArc = Arc::new(OpenMonitor::start(tx)?);
+        (mon, Some(rx))
+    } else {
+        let mon: FileOpenMonitorArc = Arc::new(NullOpenMonitor);
+        (mon, None)
+    };
+
+    let (cont_tx, cont_rx) = tokio::sync::mpsc::channel(10);
+    let mut containers = Containers::new(cont_tx);
+    if let Some(host) = config.docker_host() {
+        containers.track_docker(host);
+    }
+
+    if let Some(host) = config.containerd_host() {
+        containers.track_k8s(host);
+    }
+
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
-    let host_wrkld = HostWorkload::new(sbom, config.clone(), host_root.clone(), hostname)?;
-    let host_wrkld_req = to_upsert_workload_req(&host_wrkld);
+    let host_wrkld = HostWorkload::new(sbom, config.clone(), open_mon.clone())?;
 
-    let _wl_mgr = WorkloadManager::start(config, &host_root, host_wrkld, events_tx)?;
+    register_host_workload(&mut client, &host_wrkld).await?;
 
-    info!("Registering BaseOS workload");
-    client.upsert_workload(host_wrkld_req).await?;
+    let containers = Arc::new(containers);
+    let workloads = Workloads::new(config, host_wrkld, open_mon.clone());
 
-    info!("Starting to monitor packages in use");
-    report_in_use(&mut client, events_rx).await;
+    tokio::task::spawn(
+        track_container_lifecycle(cont_rx, workloads.containers.clone(), events_tx.clone())
+    );
+
+    if let Some(rx) = open_rx {
+        tokio::task::spawn(
+            workloads::in_use::track_pkgs_in_use(containers.clone(), workloads.clone(), rx)
+        );
+    }
+
+    info!("Monitoring workloads");
+    monitor(workloads, &mut client, events_rx).await;
 
     Ok(())
 }
 
-async fn report_in_use(client: &mut platform::Client, mut events: Receiver<Event>) {
-    let mut in_use = InUseReporter::new();
-
+async fn monitor(workloads: Workloads, client: &mut platform::Client, mut events: Receiver<Event>) {
     let mut periods = tokio::time::interval(Duration::from_millis(1000));
 
     loop {
@@ -145,12 +147,29 @@ async fn report_in_use(client: &mut platform::Client, mut events: Receiver<Event
                 match evt {
                     Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
                     Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
-                    Some(Event::PackageInUse(id, pkgs)) => in_use.add(id, pkgs),
                     None => break,
                 }
             },
             _ = periods.tick() => {
-                in_use.flush(client).await
+                let (id, pkgs) = workloads.host.lock()
+                    .unwrap()
+                    .flush_in_use();
+
+                if let Err(err) = client.report_in_use(id, pkgs).await {
+                        error!("Failed to report-in-use: {err}");
+                }
+
+                let batches = workloads.containers.lock()
+                    .unwrap()
+                    .flush_in_use();
+
+                for (id, pkgs) in batches {
+                    if !pkgs.is_empty() {
+                        if let Err(err) = client.report_in_use(id, pkgs).await {
+                            error!("Failed to report-in-use: {err}");
+                        }
+                    }
+                }
             }
         }
     }
@@ -217,6 +236,35 @@ async fn handle_container_stopped(client: &mut platform::Client, id: String, inf
     }
 }
 
+async fn load_sbom(args: &CliArgs, config: Arc<Config>, client: &mut platform::Client) -> Result<Sbom> {
+    let sbom = match &args.sbom {
+        Some(sbom_path) => {
+            info!("Loading SBOM");
+            let sbom = Sbom::load(&sbom_path.into())?;
+
+            if !args.no_sbom_upload {
+                upload_sbom(client, sbom_path, sbom.id()).await?;
+            }
+
+            sbom
+        },
+        None => {
+            info!("Generating SBOM");
+            let host_root = RootFsPath::from(config.host_root());
+            let tmp_file = sbom::generate(config.clone(), &host_root).await?;
+            let sbom = Sbom::load(&tmp_file.path().into())?;
+
+            if !args.no_sbom_upload {
+                upload_sbom(client, tmp_file.path(), sbom.id()).await?;
+            }
+
+            sbom
+        },
+    };
+
+    Ok(sbom)
+}
+
 async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: String) -> Result<()> {
     info!("Uploading SBOM to EdgeBit");
     let f = std::fs::File::open(path)?;
@@ -224,28 +272,9 @@ async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: Strin
     Ok(())
 }
 
-struct InUseReporter {
-    batches: HashMap<String, Vec<PkgRef>>,
-}
-
-impl InUseReporter {
-    fn new() -> Self {
-        Self{
-            batches: HashMap::new(),
-        }
-    }
-
-    fn add(&mut self, workload_id: String, mut pkgs: Vec<PkgRef>) {
-        self.batches.entry(workload_id)
-            .or_insert(Vec::new())
-            .append(&mut pkgs);
-    }
-
-    async fn flush(&mut self, client: &mut platform::Client) {
-        for (id, pkgs) in self.batches.drain() {
-            if let Err(err) = client.report_in_use(id, pkgs).await {
-                error!("Failed to report-in-use: {err}");
-            }
-        }
-    }
+async fn register_host_workload(client: &mut platform::Client, workload: &HostWorkload) -> Result<()> {
+    info!("Registering BaseOS workload");
+    let req = to_upsert_workload_req(&workload);
+    client.upsert_workload(req).await?;
+    Ok(())
 }

@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "edgebit-agent"
-version = "0.3.1"
+version = "0.3.2+beta1"
 dependencies = [
  "anyhow",
  "async-stream",
