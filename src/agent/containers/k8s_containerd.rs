@@ -13,14 +13,14 @@ use containerd_client::types::v1::Status;
 use containerd_client::services::v1::events_client::EventsClient;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::tasks_client::TasksClient;
-use oci_spec::runtime::Spec;
-
 use containerd_client::events::*;
+use oci_spec::runtime::Spec;
 use prost::DecodeError;
 use prost_types::Any;
 
 use super::{ContainerEventsPtr, ContainerInfo};
 use crate::scoped_path::*;
+use crate::label::*;
 
 const NAMESPACE: &str = "k8s.io";
 const OCI_SPEC_TYPE_NAME: &str = "types.containerd.io/opencontainers/runtime-spec/1/Spec";
@@ -222,10 +222,18 @@ impl K8sContainerdTracker {
         };
 
         let name = c.labels.remove(CONTAINER_LABEL_NAME);
+        let pod = c.labels.remove(CONTAINER_LABEL_POD_NAME);
+        let ns = c.labels.remove(CONTAINER_LABEL_NAMESPACE);
 
-        // TODO: expose these as well
-        let _pod = c.labels.remove(CONTAINER_LABEL_POD_NAME);
-        let _ns = c.labels.remove(CONTAINER_LABEL_NAMESPACE);
+        let mut labels = HashMap::new();
+
+        if let Some(pod) = pod {
+            labels.insert(LABEL_KUBE_POD_NAME.to_string(), pod);
+        }
+
+        if let Some(ns) = ns {
+            labels.insert(LABEL_KUBE_NAMESPACE.to_string(), ns);
+        }
 
         let mounts: Vec<PathBuf> = if let Some(spec) = c.spec {
             if let Some(oci_spec) = into_oci_spec(spec) {
@@ -253,6 +261,7 @@ impl K8sContainerdTracker {
             start_time: c.created_at.and_then(|t| t.try_into().ok()),
             end_time: None,
             mounts,
+            labels,
         };
 
         (c.id, ci)

@@ -25,7 +25,7 @@ const REPORTED_LRU_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(256
 
 pub struct HostWorkload {
     pub id: String,
-    pub labels: Vec<String>,
+    pub labels: HashMap<String, String>,
     pub hostname: String,
     pub os_pretty_name: String,
     pub image_id: String,
@@ -37,7 +37,7 @@ pub struct HostWorkload {
 }
 
 impl HostWorkload {
-    pub fn new(sbom: Sbom, config: Arc<Config>, open_mon: FileOpenMonitorArc) -> Result<Self> {
+    pub fn new(sbom: Sbom, config: Arc<Config>, open_mon: FileOpenMonitorArc, labels: HashMap<String, String>) -> Result<Self> {
         let host_root = RootFsPath::from(config.host_root());
         let id = load_baseos_id();
 
@@ -75,7 +75,7 @@ impl HostWorkload {
 
         Ok(Self{
             id,
-            labels: Vec::new(),
+            labels,
             hostname: config.hostname(),
             os_pretty_name,
             image_id: sbom.id(),

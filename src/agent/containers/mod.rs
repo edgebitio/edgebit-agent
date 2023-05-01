@@ -24,6 +24,7 @@ use podman::PodmanTracker;
 use k8s_containerd::K8sContainerdTracker;
 
 use crate::scoped_path::*;
+use crate::cloud_metadata::CloudMetadata;
 
 // Docker containers will contain the id somewhere in the cgroup name
 const CONTAINER_CLEANUP_LAG: Duration = Duration::from_secs(10);
@@ -42,6 +43,7 @@ pub struct ContainerInfo {
     pub start_time: Option<SystemTime>,
     pub end_time: Option<SystemTime>,
     pub mounts: Vec<PathBuf>,
+    pub labels: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -60,10 +62,11 @@ struct Inner {
 pub struct Containers {
     inner: Arc<Inner>,
     tasks: Vec<JoinHandle<()>>,
+    cloud_meta: CloudMetadata,
 }
 
 impl Containers {
-    pub fn new(ch: Sender<ContainerEvent>) -> Self {
+    pub fn new(cloud_meta: CloudMetadata, ch: Sender<ContainerEvent>) -> Self {
         let inner = Arc::new(Inner {
             cont_map: Arc::new(Mutex::new(ContainerMap::new())),
             ch,
@@ -72,11 +75,13 @@ impl Containers {
         Self {
             inner,
             tasks: Vec::new(),
+            cloud_meta,
         }
     }
 
     pub fn track_docker(&mut self, host: String) {
         let ev: ContainerEventsPtr = self.inner.clone();
+        let cloud_meta = self.cloud_meta.clone();
 
         let task = tokio::task::spawn(async move {
             loop {
@@ -93,7 +98,7 @@ impl Containers {
                         info!("Podman detected, reconnecting");
                         match PodmanTracker::connect(&host).await {
                             Ok(tracker) => {
-                                if let Err(err) = tracker.track(ev.clone()).await {
+                                if let Err(err) = tracker.track(cloud_meta.clone(), ev.clone()).await {
                                     error!("Container monitoring: {err}");
                                 }
                             },
@@ -102,7 +107,7 @@ impl Containers {
                         }
                     },
                     _ => {
-                        if let Err(err) = tracker.track(ev.clone()).await {
+                        if let Err(err) = tracker.track(cloud_meta.clone(), ev.clone()).await {
                             error!("Container monitoring: {err}");
                         }
                     }

@@ -15,6 +15,7 @@ use chrono::{DateTime, offset::Utc, offset::FixedOffset};
 
 use super::{ContainerEventsPtr, ContainerInfo};
 use crate::scoped_path::*;
+use crate::cloud_metadata::CloudMetadata;
 
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay2";
 const DOCKER_CONNECT_TIMEOUT: u64 = 5;
@@ -69,15 +70,22 @@ impl DockerTracker {
         Ok(false)
     }
 
-    pub async fn track(self, events: ContainerEventsPtr) -> Result<()> {
-        let docker = Arc::new(self.docker);
+    pub async fn track(self, cloud_meta: CloudMetadata, events: ContainerEventsPtr) -> Result<()> {
+        let tracker = Arc::new(Tracker{
+            docker: self.docker,
+            cloud_meta,
+            events,
+        });
 
-        let events_task = tokio::task::spawn(
-            stream_events(docker.clone(), events.clone())
-        );
+        let events_task = {
+            let tracker = tracker.clone();
+            tokio::task::spawn(async move {
+                tracker.stream_events().await;
+            })
+        };
 
         // Load already running containers
-        load_running(&docker, events.clone()).await?;
+        tracker.load_running().await?;
 
         _ = events_task.await;
 
@@ -85,161 +93,168 @@ impl DockerTracker {
     }
 }
 
-async fn stream_events(
-    docker: Arc<Docker>,
-    events: ContainerEventsPtr
-) {
-    let opts = EventsOptions {
-        since: None,
-        until: None,
-        filters: [
-            ("event", vec!["start", "die"]),
-        ].into(),
-    };
-
-    let mut stream = docker.events(Some(opts));
-
-    while let Some(evt) = stream.next().await {
-        debug!("Docker event: {evt:?}");
-
-        match evt {
-            Ok(msg) => process_event(&docker, msg, events.clone()).await,
-            Err(err) => error!("failed to receive docker event: {err}"),
-        }
-    }
-
-    debug!("Docker event streaming done");
+struct Tracker {
+    docker: Docker,
+    cloud_meta: CloudMetadata,
+    events: ContainerEventsPtr,
 }
 
-async fn process_event(docker: &Docker, msg: EventMessage, events: ContainerEventsPtr) {
-    if msg.typ == Some(EventMessageTypeEnum::CONTAINER) {
-        if let Some(action) = msg.action {
-            if let Some(actor) = msg.actor {
-                let id = actor.id.unwrap_or("(none)".to_string());
+impl Tracker {
+    async fn stream_events(&self) {
+        let opts = EventsOptions {
+            since: None,
+            until: None,
+            filters: [
+                ("event", vec!["start", "die"]),
+            ].into(),
+        };
 
-                match action.as_ref() {
-                    "start" => {
-                        debug!("Container {id} started");
+        let mut stream = self.docker.events(Some(opts));
 
-                        match inspect_container(docker, &id).await {
-                            Ok(info) => {
-                                events.container_started(id, info).await;
-                            },
-                            Err(err) => {
-                                error!("Failed to inspect container(id={id}): {err}");
-                                return;
+        while let Some(evt) = stream.next().await {
+            debug!("Docker event: {evt:?}");
+
+            match evt {
+                Ok(msg) => self.process_event(msg).await,
+                Err(err) => error!("failed to receive docker event: {err}"),
+            }
+        }
+
+        debug!("Docker event streaming done");
+    }
+
+    async fn process_event(&self, msg: EventMessage) {
+        if msg.typ == Some(EventMessageTypeEnum::CONTAINER) {
+            if let Some(action) = msg.action {
+                if let Some(actor) = msg.actor {
+                    let id = actor.id.unwrap_or("(none)".to_string());
+
+                    match action.as_ref() {
+                        "start" => {
+                            debug!("Container {id} started");
+
+                            match self.inspect_container(&id).await {
+                                Ok(info) => {
+                                    self.events.container_started(id, info).await;
+                                },
+                                Err(err) => {
+                                    error!("Failed to inspect container(id={id}): {err}");
+                                    return;
+                                }
                             }
-                        }
-                    },
-                    "die" => {
-                        let end_time = msg.time
-                            .map(systime_from_secs)
-                            .unwrap_or(SystemTime::now());
+                        },
+                        "die" => {
+                            let end_time = msg.time
+                                .map(systime_from_secs)
+                                .unwrap_or(SystemTime::now());
 
-                        events.container_stopped(id, end_time).await;
-                    },
-                    _ => (),
+                            self.events.container_stopped(id, end_time).await;
+                        },
+                        _ => (),
+                    }
                 }
             }
         }
     }
-}
 
-async fn load_running(docker: &Docker, events: ContainerEventsPtr) -> Result<()> {
-    let opts = ListContainersOptions::<&str>{
-        filters: HashMap::from([
-            ("status", vec!["running"])
-        ]),
-        ..Default::default()
-    };
+    async fn load_running(&self) -> Result<()> {
+        let opts = ListContainersOptions::<&str>{
+            filters: HashMap::from([
+                ("status", vec!["running"])
+            ]),
+            ..Default::default()
+        };
 
-    let conts = docker.list_containers(Some(opts)).await?;
+        let conts = self.docker.list_containers(Some(opts)).await?;
 
-    for c in conts {
-        if c.id.is_none() {
-            continue;
-        }
-        let id = c.id.unwrap();
-
-        match inspect_container(docker, &id).await {
-            Ok(info) => {
-                debug!("Container started: {id}; {info:?}");
-                events.container_started(id, info).await;
-            },
-            Err(err) => {
-                error!("Docker inspect_container({id}): {err}");
+        for c in conts {
+            if c.id.is_none() {
                 continue;
             }
-        };
-    }
+            let id = c.id.unwrap();
 
-    Ok(())
-}
-
-async fn inspect_container(docker: &Docker, id: &str) -> Result<ContainerInfo> {
-    let cont_resp = docker.inspect_container(id, None).await?;
-
-    let rootfs = match cont_resp.graph_driver {
-        Some(mut driver) => {
-            if driver.name == GRAPH_DRIVER_OVERLAYFS {
-                driver.data.remove("MergedDir")
-                    .map(|path| HostPath::from(path))
-            } else {
-                None
-            }
-        },
-        None => None,
-    };
-
-    let image_tag = match &cont_resp.image {
-        Some(id) => {
-            docker.inspect_image(id).await?
-                .repo_tags
-                .map(|tags| head(&tags))
-                .flatten()
-        },
-        None => None,
-    };
-
-    let (start_time, end_time) = match cont_resp.state {
-        Some(state) => {
-            // Convert from ISO 8601 string to SystemTime
-
-            let started_at = state.started_at
-                .map(|t| t.parse::<DateTime<Utc>>().ok())
-                .flatten()
-                .map(|t| t.into());
-
-            let finished_at = match state.status {
-                Some(ContainerStateStatusEnum::RUNNING) | Some(ContainerStateStatusEnum::PAUSED) => None,
-                _ => {
-                    state.finished_at .map(|t| t.parse::<DateTime<Utc>>().ok())
-                        .flatten()
-                        .filter(|t| t > &DT_UNIX_EPOCH)
-                        .map(|t| t.into())
+            match self.inspect_container(&id).await {
+                Ok(info) => {
+                    debug!("Container started: {id}; {info:?}");
+                    self.events.container_started(id, info).await;
+                },
+                Err(err) => {
+                    error!("Docker inspect_container({id}): {err}");
+                    continue;
                 }
             };
+        }
 
-            (started_at, finished_at)
-        },
-        None => (None, None)
-    };
+        Ok(())
+    }
 
-    let mounts = cont_resp.mounts
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|m| m.destination.map(|d| d.into()))
-        .collect();
+    async fn inspect_container(&self, id: &str) -> Result<ContainerInfo> {
+        let cont_resp = self.docker.inspect_container(id, None).await?;
 
-    Ok(ContainerInfo{
-        name: cont_resp.name,
-        image_id: cont_resp.image,
-        image: image_tag,
-        rootfs,
-        start_time,
-        end_time,
-        mounts,
-    })
+        let rootfs = match cont_resp.graph_driver {
+            Some(mut driver) => {
+                if driver.name == GRAPH_DRIVER_OVERLAYFS {
+                    driver.data.remove("MergedDir")
+                        .map(|path| HostPath::from(path))
+                } else {
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let image_tag = match &cont_resp.image {
+            Some(id) => {
+                self.docker.inspect_image(id).await?
+                    .repo_tags
+                    .map(|tags| head(&tags))
+                    .flatten()
+            },
+            None => None,
+        };
+
+        let (start_time, end_time) = match cont_resp.state {
+            Some(state) => {
+                // Convert from ISO 8601 string to SystemTime
+
+                let started_at = state.started_at
+                    .map(|t| t.parse::<DateTime<Utc>>().ok())
+                    .flatten()
+                    .map(|t| t.into());
+
+                let finished_at = match state.status {
+                    Some(ContainerStateStatusEnum::RUNNING) | Some(ContainerStateStatusEnum::PAUSED) => None,
+                    _ => {
+                        state.finished_at .map(|t| t.parse::<DateTime<Utc>>().ok())
+                            .flatten()
+                            .filter(|t| t > &DT_UNIX_EPOCH)
+                            .map(|t| t.into())
+                    }
+                };
+
+                (started_at, finished_at)
+            },
+            None => (None, None)
+        };
+
+        let mounts = cont_resp.mounts
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|m| m.destination.map(|d| d.into()))
+            .collect();
+
+        Ok(ContainerInfo{
+            name: cont_resp.name,
+            image_id: cont_resp.image,
+            image: image_tag,
+            rootfs,
+            start_time,
+            end_time,
+            mounts,
+            labels: self.cloud_meta.container_labels(id),
+        })
+    }
+
 }
 
 fn systime_from_secs(secs: i64) -> SystemTime {

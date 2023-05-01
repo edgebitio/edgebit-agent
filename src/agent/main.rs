@@ -9,7 +9,10 @@ pub mod workloads;
 pub mod version;
 pub mod scoped_path;
 pub mod chroot_cmd;
+pub mod label;
+pub mod cloud_metadata;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, Duration};
 use std::sync::Arc;
@@ -31,6 +34,8 @@ use scoped_path::*;
 
 use crate::open_monitor::{FileOpenMonitorArc, OpenMonitor, NullOpenMonitor, OpenEvent};
 use crate::workloads::track_container_lifecycle;
+
+use crate::cloud_metadata::CloudMetadata;
 
 const TIMESTAMP_INFINITY: Timestamp = Timestamp {
     seconds: 4134009600, // 2101-01-01
@@ -95,6 +100,8 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     client.reset_workloads().await?;
 
+    let cloud_meta = CloudMetadata::load().await;
+
     let (open_mon, open_rx) = if config.pkg_tracking() {
         let (tx, rx) = tokio::sync::mpsc::channel::<OpenEvent>(1000);
         let mon: FileOpenMonitorArc = Arc::new(OpenMonitor::start(tx)?);
@@ -105,7 +112,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     };
 
     let (cont_tx, cont_rx) = tokio::sync::mpsc::channel(10);
-    let mut containers = Containers::new(cont_tx);
+    let mut containers = Containers::new(cloud_meta.clone(), cont_tx);
     if let Some(host) = config.docker_host() {
         containers.track_docker(host);
     }
@@ -115,12 +122,17 @@ async fn run(args: &CliArgs) -> Result<()> {
     }
 
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
-    let host_wrkld = HostWorkload::new(sbom, config.clone(), open_mon.clone())?;
+    let host_wrkld = HostWorkload::new(
+        sbom,
+        config.clone(),
+        open_mon.clone(),
+        cloud_meta.host_labels()
+    )?;
 
-    register_host_workload(&mut client, &host_wrkld).await?;
+    register_host_workload(&mut client, &host_wrkld, config.labels()).await?;
 
     let containers = Arc::new(containers);
-    let workloads = Workloads::new(config, host_wrkld, open_mon.clone());
+    let workloads = Workloads::new(config.clone(), host_wrkld, open_mon.clone());
 
     tokio::task::spawn(
         track_container_lifecycle(cont_rx, workloads.containers.clone(), events_tx.clone())
@@ -133,19 +145,20 @@ async fn run(args: &CliArgs) -> Result<()> {
     }
 
     info!("Monitoring workloads");
-    monitor(workloads, &mut client, events_rx).await;
+    monitor(config, workloads, &mut client, events_rx).await;
 
     Ok(())
 }
 
-async fn monitor(workloads: Workloads, client: &mut platform::Client, mut events: Receiver<Event>) {
+async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platform::Client, mut events: Receiver<Event>) {
     let mut periods = tokio::time::interval(Duration::from_millis(1000));
+    let labels = config.labels();
 
     loop {
         tokio::select!{
             evt = events.recv() => {
                 match evt {
-                    Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info).await,
+                    Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info, labels.clone()).await,
                     Some(Event::ContainerStopped(id, info)) => handle_container_stopped(client, id, info).await,
                     None => break,
                 }
@@ -175,11 +188,14 @@ async fn monitor(workloads: Workloads, client: &mut platform::Client, mut events
     }
 }
 
-fn to_upsert_workload_req(workload: &HostWorkload) -> pb::UpsertWorkloadRequest {
+fn to_upsert_workload_req(workload: &HostWorkload, mut extra_labels: HashMap<String, String>) -> pb::UpsertWorkloadRequest {
+    let mut labels = workload.labels.clone();
+    labels.extend(extra_labels.drain());
+
     pb::UpsertWorkloadRequest {
         workload_id: workload.id.clone(),
         workload: Some(pb::Workload{
-            labels: Vec::new(),
+            labels,
             kind: Some(pb::workload::Kind::Host(pb::Host{
                 hostname: workload.hostname.clone(),
                 instance: String::new(),
@@ -195,14 +211,17 @@ fn to_upsert_workload_req(workload: &HostWorkload) -> pb::UpsertWorkloadRequest 
     }
 }
 
-async fn handle_container_started(client: &mut platform::Client, id: String, info: ContainerInfo) {
+async fn handle_container_started(client: &mut platform::Client, id: String, info: ContainerInfo, mut extra_labels: HashMap<String, String>) {
     info!("Registering container started: {id}");
     debug!("Container info: {info:?}");
+
+    let mut labels = info.labels.clone();
+    labels.extend(extra_labels.drain());
 
     let res = client.upsert_workload(pb::UpsertWorkloadRequest{
             workload_id: id,
             workload: Some(pb::Workload{
-                labels: Vec::new(),
+                labels,
                 kind: Some(pb::workload::Kind::Container(pb::Container{
                     name: info.name.unwrap_or(String::new()),
                 })),
@@ -272,9 +291,9 @@ async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: Strin
     Ok(())
 }
 
-async fn register_host_workload(client: &mut platform::Client, workload: &HostWorkload) -> Result<()> {
+async fn register_host_workload(client: &mut platform::Client, workload: &HostWorkload, extra_labels: HashMap<String, String>) -> Result<()> {
     info!("Registering BaseOS workload");
-    let req = to_upsert_workload_req(&workload);
+    let req = to_upsert_workload_req(&workload, extra_labels);
     client.upsert_workload(req).await?;
     Ok(())
 }
