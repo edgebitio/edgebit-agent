@@ -18,6 +18,16 @@ mod probes {
 const OPEN_EVENTS_BUF_SIZE: usize = 256;
 const ZOMBIE_EVENTS_BUF_SIZE: usize = 4;
 
+pub trait FileOpenMonitor {
+    // NB: Adds the mountpoint of path, not the actual path.
+    fn add_path(&self, path: &RootFsPath) -> Result<()>;
+
+    // NB: Removes the mountpoint of path, not the actual path.
+    fn remove_path(&self, path: &RootFsPath) -> Result<()>;
+}
+
+pub type FileOpenMonitorArc = Arc<dyn FileOpenMonitor + Send + Sync>;
+
 #[derive(Clone)]
 struct BpfProbes {
     // ProbesSkel contains OpenObject which has a *mut,
@@ -161,7 +171,7 @@ impl ProcessInfo {
             .unwrap_or(self.cgroup.len());
 
         let cg = std::str::from_utf8(&self.cgroup[..nul])
-            .map_err(|_| anyhow!("cgroup name with non-UTF8 characters"))?;
+            .map_err(|_| anyhow!("cgroup name with non-UTF8 characters: {:?}", &self.cgroup[..nul]))?;
 
         Ok(cg)
     }
@@ -237,14 +247,16 @@ impl OpenMonitor {
         self.opens_task.abort();
         _ = self.opens_task.await;
     }
+}
 
+impl FileOpenMonitor for OpenMonitor {
     // NB: Adds the mountpoint of path, not the actual path.
-    pub fn add_path(&self, path: &RootFsPath) -> Result<()> {
+    fn add_path(&self, path: &RootFsPath) -> Result<()> {
         self.fan.add_open_mark(path.as_raw().to_path_buf())
     }
 
     // NB: Removes the mountpoint of path, not the actual path.
-    pub fn remove_path(&self, path: &RootFsPath) -> Result<()> {
+    fn remove_path(&self, path: &RootFsPath) -> Result<()> {
         self.fan.remove_open_mark(path.as_raw().to_path_buf())
     }
 }
@@ -337,4 +349,17 @@ fn bump_rlimit() -> Result<()> {
         .map_err(|err| anyhow!("failed to raise lock memory rlimit: {err}"))?;
 
     Ok(())
+}
+
+pub struct NullOpenMonitor;
+
+impl FileOpenMonitor for NullOpenMonitor {
+    fn add_path(&self, _path: &RootFsPath) -> Result<()> {
+        Ok(())
+    }
+
+    // NB: Removes the mountpoint of path, not the actual path.
+    fn remove_path(&self, _path: &RootFsPath) -> Result<()> {
+        Ok(())
+    }
 }

@@ -66,7 +66,7 @@ impl Containers {
     pub fn new(ch: Sender<ContainerEvent>) -> Self {
         let inner = Arc::new(Inner {
             cont_map: Arc::new(Mutex::new(ContainerMap::new())),
-            ch: ch.clone(),
+            ch,
         });
 
         Self {
@@ -165,7 +165,7 @@ impl ContainerRuntimeEvents for Inner {
             .unwrap()
             .insert(id.clone(), info.clone());
 
-        _ = self.ch.send(ContainerEvent::Started(id, info)).await;
+        self.ch.send(ContainerEvent::Started(id, info)).await.unwrap();
     }
 
     async fn container_stopped(&self, id: String, stop_time: SystemTime) {
