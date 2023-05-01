@@ -65,7 +65,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define MAX_PATH 256
 
 // For working with tracepoint's dynamic array
-#define DYN_ARRAY(s, member) ( ((void*)(s)) + (s)->__data_loc_##member )
+#define DYN_ARRAY(s, member) ( ((void*)(s)) + ((s)->__data_loc_##member & 0xffff) )
 
 // strcpy into an array
 #define KCOPY_STR(dst, src) (bpf_probe_read_kernel_str((dst), sizeof(dst), (src)))
@@ -309,7 +309,7 @@ static int cgroup_migrate_task(struct trace_event_raw_cgroup_migrate *tp) {
     const char *cgrp = (const char*) DYN_ARRAY(tp, dst_path);
 
     if (KCOPY_STR(&proc_info.cgroup, cgrp) < 0) {
-        bpf_printk("tp/cgroup_attach_task: cgroup name read failed");
+        bpf_printk("cgroup_migrate_task: cgroup name read failed");
         return 0;
     }
 
