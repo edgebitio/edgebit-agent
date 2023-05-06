@@ -27,8 +27,7 @@ fn build_bpf() -> Result<(), Box<dyn std::error::Error>> {
     out.push("probes.skel.rs");
     SkeletonBuilder::new()
         .source(PROBES_SRC)
-        .clang("clang-10")
-//        .clang_args("-D__TARGET_ARCH_x86")
+        .clang("clang")
         .build_and_generate(&out)?;
     println!("cargo:rerun-if-changed={PROBES_SRC}");
     Ok(())

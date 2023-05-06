@@ -71,6 +71,11 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define KCOPY_STR(dst, src) (bpf_probe_read_kernel_str((dst), sizeof(dst), (src)))
 #define UCOPY_STR(dst, src) (bpf_probe_read_user_str((dst), sizeof(dst), (src)))
 
+// Using bpf_probe_printk/bpf_printk introduces symbols into .rodata section that
+// libbpf has problems loading into older kernels. The hack is to only enable
+// this macro on newer kernels (for development)
+#define BPF_PRINTK(fmt, ...) //bpf_trace_printk((fmt), sizeof(fmt), ##__VA_ARGS__)
+
 struct open_inflight_entry {
     const char* filename;
     u32 flags;
@@ -100,21 +105,6 @@ BPF_PERF_EVENT_ARRAY(open_events);
 // Process exit events
 BPF_PERF_EVENT_ARRAY(zombie_events);
 
-/*
-static struct file* get_file(int fd) {
-    struct task_struct *current = (struct task_struct *)bpf_get_current_task();
-    struct fdtable *fdt = BPF_CORE_READ(current, files, fdt);
-    unsigned max_fds = BPF_CORE_READ(fdt, max_fds);
-    struct file **files = BPF_CORE_READ(fdt, fd);
-    struct file* f = NULL;
-    if (bpf_probe_read_kernel(&f, sizeof(f), &files[fd]) < 0) {
-        bpf_printk("probe_read err: files: %lx, max=%u, fd=%d", (u64)files, max_fds, fd);
-        return NULL;
-    }
-    return f;
-}
-*/
-
 static inline bool is_abs(const char *filename) {
     return filename && *filename == '/';
 }
@@ -127,12 +117,12 @@ static int fill_cgroup_name(char *buf, size_t buf_len) {
 
     if (name) {
         if (bpf_probe_read_kernel_str(buf, buf_len, name) < 0) {
-            bpf_printk("probe_read_kernel_str error");
+            BPF_PRINTK("probe_read_kernel_str error");
             return -1;
         }
     } else {
         buf[0] = '\0';
-        bpf_printk("cgroup name is NULL");
+        BPF_PRINTK("cgroup name is NULL");
     }
 
     return 0;
@@ -176,12 +166,12 @@ static void emit_open_event(void *ctx, pid_t tgid, const char *filename, bool us
 
     if (user) {
         if (UCOPY_STR(evt.filename, filename) < 0) {
-            bpf_printk("emit_open_event: probe_read_user_str error of %lx", (unsigned long)filename);
+            BPF_PRINTK("emit_open_event: probe_read_user_str error of %lx", (unsigned long)filename);
             return;
         }
     } else {
         if (KCOPY_STR(evt.filename, filename) < 0) {
-            bpf_printk("emit_open_event: probe_read_kernel_str error of %lx", (unsigned long)filename);
+            BPF_PRINTK("emit_open_event: probe_read_kernel_str error of %lx", (unsigned long)filename);
             return;
         }
     }  
@@ -191,7 +181,7 @@ static void emit_open_event(void *ctx, pid_t tgid, const char *filename, bool us
         return;
 
     if (bpf_perf_event_output(ctx, &open_events, BPF_F_CURRENT_CPU, &evt, sizeof(evt)) < 0) {
-        bpf_printk("error sending evt_open");
+        BPF_PRINTK("error sending evt_open");
     }
 }
 
@@ -218,7 +208,7 @@ static int do_exit_open(void *ctx, int rc) {
 
 #if defined(__TARGET_ARCH_x86)
 SEC("tp/syscalls/sys_enter_creat")
-int tracepoint__syscalls__sys_enter_creat(struct trace_event_raw_sys_enter *tp) {
+int enter_creat(struct trace_event_raw_sys_enter *tp) {
     const char *filename = (const char*) tp->args[0];
 
     return do_enter_open(filename, 0);
@@ -230,7 +220,7 @@ int exit_creat(struct trace_event_raw_sys_exit *tp) {
 }
 
 SEC("tp/syscalls/sys_enter_open")
-int tracepoint__syscalls__sys_enter_open(struct trace_event_raw_sys_enter *tp) {
+int enter_open(struct trace_event_raw_sys_enter *tp) {
     const char *filename = (const char*) tp->args[0];
     int flags = tp->args[1];
 
@@ -244,7 +234,7 @@ int exit_open(struct trace_event_raw_sys_exit *tp) {
 #endif //_TARGET_ARCH_x86
 
 SEC("tp/syscalls/sys_enter_openat")
-int tracepoint__syscalls__sys_enter_openat(struct trace_event_raw_sys_enter *tp) {
+int enter_openat(struct trace_event_raw_sys_enter *tp) {
     const char *filename = (const char*) tp->args[1];
     int flags = tp->args[2];
 
@@ -257,7 +247,7 @@ int exit_openat(struct trace_event_raw_sys_exit *tp) {
 }
 
 SEC("tp/syscalls/sys_enter_openat2")
-int tracepoint__syscalls__sys_enter_openat2(struct trace_event_raw_sys_enter *tp) {
+int enter_openat2(struct trace_event_raw_sys_enter *tp) {
     const char *filename = (const char*) tp->args[1];
     struct open_how *how = (struct open_how *) tp->args[2];
 
@@ -280,7 +270,7 @@ int BPF_KPROBE(kprobe__setup_new_exec, struct linux_binprm *bprm) {
 
     const char *filename = BPF_CORE_READ(bprm, filename);
     if (!filename) {
-        bpf_printk("setup_new_exec: filename is NULL");
+        BPF_PRINTK("setup_new_exec: filename is NULL");
         return 0;
     }
 
@@ -291,7 +281,7 @@ int BPF_KPROBE(kprobe__setup_new_exec, struct linux_binprm *bprm) {
     const char *interp = BPF_CORE_READ(bprm, interp);
     if (interp != filename) {
         if (!interp) {
-            bpf_printk("setup_new_exec: interp is NULL");
+            BPF_PRINTK("setup_new_exec: interp is NULL");
             return 0;
         }
 
@@ -309,7 +299,7 @@ static int cgroup_migrate_task(struct trace_event_raw_cgroup_migrate *tp) {
     const char *cgrp = (const char*) DYN_ARRAY(tp, dst_path);
 
     if (KCOPY_STR(&proc_info.cgroup, cgrp) < 0) {
-        bpf_printk("cgroup_migrate_task: cgroup name read failed");
+        BPF_PRINTK("cgroup_migrate_task: cgroup name read failed");
         return 0;
     }
 
@@ -327,35 +317,6 @@ SEC("tp/cgroup/cgroup_transfer_tasks")
 int cgroup_transfer_tasks(struct trace_event_raw_cgroup_migrate *tp) {
     return cgroup_migrate_task(tp);
 }
-
-/*
-SEC("tp/sched/sched_process_fork")
-int sched_process_fork(struct trace_event_raw_sched_process_fork* tp) {
-    struct cgroup_name cgrp_name;
-    __builtin_memset(&cgrp_name, 0, sizeof(cgrp_name));
-
-    pid_t parent_pid = tp->parent_pid;
-    pid_t child_pid = tp->child_pid;
-
-    struct cgroup_name *name = bpf_map_lookup_elem(&pid_to_info, &parent_pid);
-    if (name) {
-        if (bpf_probe_read_kernel_str(&cgrp_name.buf, sizeof(cgrp_name.buf), name) < 0) {
-            bpf_printk("bpf_probe_read_kernel_str failed");
-            return 0;
-        }
-
-    } else {
-        // have to get it the complicated way
-        if (fill_cgroup_name(cgrp_name.buf, sizeof(cgrp_name.buf)) < 0)
-            return 0;
-    }
-
-    bpf_map_update_elem(&pid_to_info, &child_pid, &cgrp_name.buf, BPF_ANY);
-
-    bpf_printk("fork: %u to %s", child_pid, cgrp_name.buf);
-    return 0;
-}
-*/
 
 SEC("tp/sched/sched_process_exit")
 int sched_process_exit(struct trace_event_raw_sched_process_template *tp) {
@@ -378,7 +339,7 @@ int sched_process_exit(struct trace_event_raw_sched_process_template *tp) {
     // Notify the userspace that a process exited so it has a chance to clean up
     // the pid_to_info map.
     if (bpf_perf_event_output(tp, &zombie_events, BPF_F_CURRENT_CPU, &pid, sizeof(pid)) < 0) {
-        bpf_printk("error sending zombie event");
+        BPF_PRINTK("error sending zombie event");
     }
 
     return 0;
