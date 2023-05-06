@@ -40,19 +40,50 @@ impl BpfProbes {
         // first thing is to bump the ulimit for locked memory for older kernels
         bump_rlimit()?;
 
-        let skel_builder = probes::ProbesSkelBuilder::default();
-        let open_skel = skel_builder.open()
-            .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
+        let mut with_optional = true;
 
-        let mut skel = open_skel.load()
-            .map_err(|err| anyhow!("ProbesSkelBuilder::load(): {err}"))?;
+        loop {
+            let skel_builder = probes::ProbesSkelBuilder::default();
+            let mut open_skel = skel_builder.open()
+                .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
 
-        skel.attach()
-            .map_err(|err| anyhow!("ProbesSkel::attach(): {err}"))?;
+            open_skel.progs_mut()
+                .enter_openat2()
+                .set_autoload(with_optional)?;
 
-        Ok(Self {
-            skel: Arc::new(Mutex::new(skel)),
-        })
+            open_skel.progs_mut()
+                .exit_openat2()
+                .set_autoload(with_optional)?;
+
+            let mut skel = match open_skel.load() {
+                Ok(skel) => skel,
+                Err(err) => {
+                    if with_optional {
+                        info!("Loading of BPF probes failed, retrying with optional probes disabled");
+                        // if it failed on first try, disable optional programs and try again
+                        with_optional = false;
+                        continue;
+                    } else {
+                        return Err(anyhow!("ProbesSkelBuilder::load(): {err}"));
+                    }
+                }
+            };
+
+            if let Err(err) = skel.attach() {
+                if with_optional {
+                    info!("Attaching of BPF probes failed, retrying with optional probes disabled");
+                    // if it failed on first try, disable optional programs and try again
+                    with_optional = false;
+                    continue;
+                } else {
+                    return Err(anyhow!("ProbesSkelBuilder::attach(): {err}"));
+                }
+            }
+
+            return Ok(Self {
+                skel: Arc::new(Mutex::new(skel)),
+            })
+        }
     }
 
     fn lookup_cgroup(&self, pid: u32) -> Result<Option<String>> {

@@ -41,7 +41,7 @@ RUN apt-get update && \
         unzip \
         xutils-dev \
         jq \
-        clang-10 \
+        clang \
         libelf1 \
         protobuf-compiler \
         libprotobuf-dev \
