@@ -42,10 +42,16 @@ async-trait = "0.1.66"
 nix = { version = "0.26", features = ["resource", "fs"] }
 tokio-pipe = "0.2.12"
 lru = "0.10.0"
+aws-config = "0.55"
+hyper = { version = "0.14", features = ["client"] }
 
 [build-dependencies]
 tonic-build = "0.8"
 libbpf-cargo = "0.13.1"
+
+[dev-dependencies]
+assert2 = "0.3"
+hyper = { version = "0.14", features = ["server"] }
 
 [[bin]]
 name = "edgebit-agent"

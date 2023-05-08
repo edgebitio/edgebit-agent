@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
@@ -51,6 +52,8 @@ struct Inner {
     hostname: Option<String>,
 
     host_root: Option<PathBuf>,
+
+    labels: Option<HashMap<String, String>>
 }
 
 // TODO: probably worth using Figment or similar to unify yaml and env vars
@@ -224,6 +227,27 @@ impl Config {
                     .map(|v| is_yes(&v))
             })
             .unwrap_or(true)
+    }
+
+    pub fn labels(&self) -> HashMap<String, String> {
+        let mut labels = self.inner.labels
+            .clone()
+            .unwrap_or(HashMap::new());
+
+        if let Ok(labels_str) = std::env::var("EDGEBIT_LABELS") {
+            labels.extend(
+                labels_str.split(';')
+                    .filter_map(|kv|
+                        kv.split_once('=')
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                    )
+            );
+        }
+
+        // remap into the 'user:' namespace
+        labels.into_iter()
+            .map(|(k, v)| ("user:".to_string() + &k, v))
+            .collect()
     }
 }
 

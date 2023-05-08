@@ -7,6 +7,8 @@ COPY . /root/src
 RUN cargo build --release --target "$(cat /etc/arch)-unknown-linux-musl" && \
     ln -s "$(cat /etc/arch)-unknown-linux-musl/release/edgebit-agent" "target/edgebit-agent"
 
+RUN cargo test --release --target "$(cat /etc/arch)-unknown-linux-musl"
+
 # Downloads Syft and make .rpm/deb packages
 RUN cd dist && make all
 
