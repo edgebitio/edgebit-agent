@@ -924,6 +924,7 @@ dependencies = [
  "pretty_env_logger",
  "prost",
  "prost-types",
+ "rand",
  "realpath-ext",
  "regex",
  "rs-release",
