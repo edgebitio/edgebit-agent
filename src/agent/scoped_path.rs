@@ -19,6 +19,10 @@ impl HostPath {
         self.0.display()
     }
 
+    pub fn join<P: AsRef<Path>>(&self, path: P) -> HostPath {
+        self.0.join(path).into()
+    }
+
     pub fn to_rootfs(&self, prefix: &RootFsPath) -> RootFsPath {
         RootFsPath(join(prefix.as_raw(), &self.0))
     }

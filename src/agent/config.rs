@@ -2,12 +2,14 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
+use nix::NixPath;
 use serde::Deserialize;
 
 pub const CONFIG_PATH: &str = "/etc/edgebit/config.yaml";
 
 const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_DOCKER_HOST: &str = "unix:///run/docker.sock";
+const DEFAULT_CONTAINERD_ROOTS: &str = "/run/containerd/io.containerd.runtime.v2.task/k8s.io/";
 
 static DEFAULT_HOST_INCLUDES: &[&str] = &[
     "/bin",
@@ -46,6 +48,8 @@ struct Inner {
     docker_host: Option<String>,
 
     containerd_host: Option<String>,
+
+    containerd_roots: Option<PathBuf>,
 
     pkg_tracking: Option<bool>,
 
@@ -195,6 +199,22 @@ impl Config {
         } else {
             self.inner.containerd_host.clone()
         }
+    }
+
+    pub fn containerd_roots(&self) -> PathBuf {
+        if let Ok(roots) = std::env::var("EDGEBIT_CONTAINERD_ROOTS") {
+            if !roots.is_empty() {
+                return roots.into();
+            }
+        }
+
+        if let Some(ref roots) = self.inner.containerd_roots {
+            if !roots.is_empty() {
+                return roots.into();
+            }
+        }
+
+        DEFAULT_CONTAINERD_ROOTS.into()
     }
 
     pub fn hostname(&self) -> String {
