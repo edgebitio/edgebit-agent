@@ -44,6 +44,7 @@ tokio-pipe = "0.2.12"
 lru = "0.10.0"
 aws-config = "0.55"
 hyper = { version = "0.14", features = ["client"] }
+rand = "0.8"
 
 [build-dependencies]
 tonic-build = "0.8"

@@ -11,6 +11,7 @@ pub mod scoped_path;
 pub mod chroot_cmd;
 pub mod label;
 pub mod cloud_metadata;
+pub mod jitter;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,7 @@ use workloads::{Workloads, Event};
 use workloads::host::HostWorkload;
 use version::VERSION;
 use scoped_path::*;
+use jitter::JitteredDuration;
 
 use crate::open_monitor::{FileOpenMonitorArc, OpenMonitor, NullOpenMonitor, OpenEvent};
 use crate::workloads::track_container_lifecycle;
@@ -43,6 +45,7 @@ const TIMESTAMP_INFINITY: Timestamp = Timestamp {
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
+const HEARTBEAT_JITTER: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 struct CliArgs {
@@ -157,6 +160,7 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
     let labels = config.labels();
 
     let mut last_reported = Instant::now();
+    let mut jitter = JitteredDuration::new(HEARTBEAT_JITTER);
 
     loop {
         tokio::select!{
@@ -198,7 +202,7 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
 
                 if reported {
                     last_reported = Instant::now();
-                } else if last_reported.elapsed() >= HEARTBEAT_INTERVAL {
+                } else if last_reported.elapsed() >= jitter.add(HEARTBEAT_INTERVAL) {
                     if let Err(err) = client.report_in_use(host_id, Vec::new()).await {
                         error!("Failed to report-in-use (heartbeat): {err}");
                     }
