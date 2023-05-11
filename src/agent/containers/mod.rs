@@ -23,6 +23,7 @@ use docker::DockerTracker;
 use podman::PodmanTracker;
 use k8s_containerd::K8sContainerdTracker;
 
+use crate::config::Config;
 use crate::scoped_path::*;
 use crate::cloud_metadata::CloudMetadata;
 
@@ -61,12 +62,13 @@ struct Inner {
 
 pub struct Containers {
     inner: Arc<Inner>,
+    config: Arc<Config>,
     tasks: Vec<JoinHandle<()>>,
     cloud_meta: CloudMetadata,
 }
 
 impl Containers {
-    pub fn new(cloud_meta: CloudMetadata, ch: Sender<ContainerEvent>) -> Self {
+    pub fn new(config: Arc<Config>, cloud_meta: CloudMetadata, ch: Sender<ContainerEvent>) -> Self {
         let inner = Arc::new(Inner {
             cont_map: Arc::new(Mutex::new(ContainerMap::new())),
             ch,
@@ -74,6 +76,7 @@ impl Containers {
 
         Self {
             inner,
+            config,
             tasks: Vec::new(),
             cloud_meta,
         }
@@ -122,10 +125,11 @@ impl Containers {
 
     pub fn track_k8s(&mut self, host: String) {
         let ev: ContainerEventsPtr = self.inner.clone();
+        let roots = HostPath::from(self.config.containerd_roots());
 
         let task = tokio::task::spawn(async move {
             loop {
-                let tracker = K8sContainerdTracker::connect(&host).await;
+                let tracker = K8sContainerdTracker::connect(&host, roots.clone()).await;
                 if let Err(err) = tracker.track(ev.clone()).await {
                     error!("Container monitoring: {err}");
                 }

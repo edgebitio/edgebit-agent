@@ -38,10 +38,11 @@ pub struct K8sContainerdTracker {
     containers: ContainersClient<Channel>,
     tasks: TasksClient<Channel>,
     events: EventsClient<Channel>,
+    container_roots: HostPath,
 }
 
 impl K8sContainerdTracker {
-    pub async fn connect(host: &str) -> Self {
+    pub async fn connect(host: &str, container_roots: HostPath) -> Self {
         let mut quiet = false;
         let ch = loop {
             match super::grpc_connect(host).await {
@@ -66,6 +67,7 @@ impl K8sContainerdTracker {
             containers: ContainersClient::new(ch.clone()),
             tasks: TasksClient::new(ch.clone()),
             events: EventsClient::new(ch.clone()),
+            container_roots,
         }
     }
 
@@ -257,7 +259,7 @@ impl K8sContainerdTracker {
             name,
             image_id,
             image: Some(c.image),
-            rootfs: Some(get_rootfs(&c.id)),
+            rootfs: Some(self.container_roots.join(&c.id).join("rootfs")),
             start_time: c.created_at.and_then(|t| t.try_into().ok()),
             end_time: None,
             mounts,
@@ -266,11 +268,6 @@ impl K8sContainerdTracker {
 
         (c.id, ci)
     }
-}
-
-fn get_rootfs(id: &str) -> HostPath {
-    // TODO: This is far from ideal and we need to look into how to get this info from the API.
-    format!("/run/containerd/io.containerd.runtime.v2.task/k8s.io/{id}/rootfs/").into()
 }
 
 // containerd events

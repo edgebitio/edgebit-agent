@@ -117,7 +117,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     };
 
     let (cont_tx, cont_rx) = tokio::sync::mpsc::channel(10);
-    let mut containers = Containers::new(cloud_meta.clone(), cont_tx);
+    let mut containers = Containers::new(config.clone(), cloud_meta.clone(), cont_tx);
     if let Some(host) = config.docker_host() {
         containers.track_docker(host);
     }
