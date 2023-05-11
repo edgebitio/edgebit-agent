@@ -14,7 +14,7 @@ pub mod cloud_metadata;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, Duration};
+use std::time::{SystemTime, Instant, Duration};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
@@ -41,6 +41,8 @@ const TIMESTAMP_INFINITY: Timestamp = Timestamp {
     seconds: 4134009600, // 2101-01-01
     nanos: 0,
 };
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(Parser)]
 struct CliArgs {
@@ -154,6 +156,8 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
     let mut periods = tokio::time::interval(Duration::from_millis(1000));
     let labels = config.labels();
 
+    let mut last_reported = Instant::now();
+
     loop {
         tokio::select!{
             evt = events.recv() => {
@@ -164,12 +168,18 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
                 }
             },
             _ = periods.tick() => {
-                let (id, pkgs) = workloads.host.lock()
+                let mut reported = false;
+
+                let (host_id, pkgs) = workloads.host.lock()
                     .unwrap()
                     .flush_in_use();
 
-                if let Err(err) = client.report_in_use(id, pkgs).await {
+                if !pkgs.is_empty() {
+                    if let Err(err) = client.report_in_use(host_id.clone(), pkgs).await {
                         error!("Failed to report-in-use: {err}");
+                    }
+
+                    reported = true;
                 }
 
                 let batches = workloads.containers.lock()
@@ -181,7 +191,19 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
                         if let Err(err) = client.report_in_use(id, pkgs).await {
                             error!("Failed to report-in-use: {err}");
                         }
+
+                        reported = true;
                     }
+                }
+
+                if reported {
+                    last_reported = Instant::now();
+                } else if last_reported.elapsed() >= HEARTBEAT_INTERVAL {
+                    if let Err(err) = client.report_in_use(host_id, Vec::new()).await {
+                        error!("Failed to report-in-use (heartbeat): {err}");
+                    }
+
+                    last_reported = Instant::now();
                 }
             }
         }
