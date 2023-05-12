@@ -67,12 +67,12 @@ impl Ec2Metadata {
 impl super::MetadataProvider for Ec2Metadata {
     fn host_labels(&self) -> HashMap<String, String> {
         [
-            (LABEL_CLOUD.to_string(), "ec2".to_string()),
+            (LABEL_CLOUD_PROVIDER.to_string(), "ec2".to_string()),
             (LABEL_INSTANCE_ID.to_string(), self.doc.instance_id.clone()),
             (LABEL_IMAGE_ID.to_string(), self.doc.image_id.clone()),
-            (LABEL_REGION.to_string(), self.doc.region.clone()),
-            (LABEL_ZONE.to_string(), self.doc.availability_zone.clone()),
-            (LABEL_ACCOUNT_ID.to_string(), self.doc.account_id.clone()),
+            (LABEL_CLOUD_REGION.to_string(), self.doc.region.clone()),
+            (LABEL_CLOUD_ZONE.to_string(), self.doc.availability_zone.clone()),
+            (LABEL_CLOUD_ACCOUNT_ID.to_string(), self.doc.account_id.clone()),
         ].into()
     }
 
@@ -149,12 +149,12 @@ mod tests {
         let metadata = Ec2Metadata::load().await.unwrap();
         let labels = metadata.host_labels();
 
-        assert!(labels.get(LABEL_CLOUD).unwrap() == "ec2");
+        assert!(labels.get(LABEL_CLOUD_PROVIDER).unwrap() == "ec2");
         assert!(labels.get(LABEL_INSTANCE_ID).unwrap() == "i-01d1e9aa7a573262f");
         assert!(labels.get(LABEL_IMAGE_ID).unwrap() == "ami-0557a15b87f6559cf");
-        assert!(labels.get(LABEL_REGION).unwrap() == "us-east-1");
-        assert!(labels.get(LABEL_ZONE).unwrap() == "us-east-1d");
-        assert!(labels.get(LABEL_ACCOUNT_ID).unwrap() == "601263177651");
+        assert!(labels.get(LABEL_CLOUD_REGION).unwrap() == "us-east-1");
+        assert!(labels.get(LABEL_CLOUD_ZONE).unwrap() == "us-east-1d");
+        assert!(labels.get(LABEL_CLOUD_ACCOUNT_ID).unwrap() == "601263177651");
 
         server_task.abort();
         _ = server_task.await;

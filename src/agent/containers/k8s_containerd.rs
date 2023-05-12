@@ -234,7 +234,7 @@ impl K8sContainerdTracker {
         }
 
         if let Some(ns) = ns {
-            labels.insert(LABEL_KUBE_NAMESPACE.to_string(), ns);
+            labels.insert(LABEL_KUBE_NAMESPACE_NAME.to_string(), ns);
         }
 
         let mounts: Vec<PathBuf> = if let Some(spec) = c.spec {

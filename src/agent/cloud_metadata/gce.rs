@@ -81,19 +81,19 @@ impl GceMetadata {
 impl super::MetadataProvider for GceMetadata {
     fn host_labels(&self) -> HashMap<String, String> {
         let mut labels: HashMap<String, String> = [
-            (LABEL_CLOUD.to_string(), "gce".to_string()),
+            (LABEL_CLOUD_PROVIDER.to_string(), "gce".to_string()),
             (LABEL_INSTANCE_ID.to_string(), format!("{}", self.doc.instance.id)),
             (LABEL_IMAGE_ID.to_string(), self.doc.instance.image.clone()),
-            (LABEL_PROJECT_ID.to_string(), self.doc.project.project_id.clone()),
+            (LABEL_CLOUD_PROJECT_ID.to_string(), self.doc.project.project_id.clone()),
         ].into();
 
         let (region, zone) = parse_zone(&self.doc.instance.zone);
         if let Some(region) = region {
-            labels.insert(LABEL_REGION.to_string(), region);
+            labels.insert(LABEL_CLOUD_REGION.to_string(), region);
         }
 
         if let Some(zone) = zone {
-            labels.insert(LABEL_ZONE.to_string(), zone);
+            labels.insert(LABEL_CLOUD_ZONE.to_string(), zone);
         }
 
         labels
@@ -223,12 +223,12 @@ mod tests {
         let metadata = GceMetadata::load_from_host("localhost:9992").await.unwrap();
         let labels = metadata.host_labels();
 
-        assert!(labels.get(LABEL_CLOUD).unwrap() == "gce");
+        assert!(labels.get(LABEL_CLOUD_PROVIDER).unwrap() == "gce");
         assert!(labels.get(LABEL_INSTANCE_ID).unwrap() == "7857118082129425400");
         assert!(labels.get(LABEL_IMAGE_ID).unwrap() == "projects/gke-node-images/global/images/gke-12410-gke2300-cos-97-16919-235-13-v230222-c-pre");
-        assert!(labels.get(LABEL_REGION).unwrap() == "us-central1");
-        assert!(labels.get(LABEL_ZONE).unwrap() == "us-central1-c");
-        assert!(labels.get(LABEL_PROJECT_ID).unwrap() == "sandbox-373114");
+        assert!(labels.get(LABEL_CLOUD_REGION).unwrap() == "us-central1");
+        assert!(labels.get(LABEL_CLOUD_ZONE).unwrap() == "us-central1-c");
+        assert!(labels.get(LABEL_CLOUD_PROJECT_ID).unwrap() == "sandbox-373114");
 
         server_task.abort();
         _ = server_task.await;
