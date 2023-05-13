@@ -19,6 +19,10 @@ COPY --from=build /root/src/target/edgebit-agent /opt/edgebit/edgebit-agent
 COPY --from=build /root/src/dist/syft/ /opt/edgebit/syft/
 COPY --from=build /root/src/dist/syft.yaml /opt/edgebit/syft.yaml
 
+# Due to a few bugs in Rust's AWS bindings, it needs native certs even
+# though it won't use them since IMDS is over HTTP
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
 # Create the basic directory structure.
 # Since the image is based on scratch, there's no "mkdir" to run.
 COPY --from=build /tmp/dummy /etc/edgebit/
