@@ -229,7 +229,7 @@ fn to_upsert_workload_req(workload: &HostWorkload, mut extra_labels: HashMap<Str
             })),
         }),
         start_time: Some(SystemTime::now().into()),
-        end_time: None,
+        end_time: Some(TIMESTAMP_INFINITY),
         image_id: workload.image_id.clone(),
         image: Some(pb::Image{
             kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
