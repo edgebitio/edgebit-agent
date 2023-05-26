@@ -47,6 +47,8 @@ const TIMESTAMP_INFINITY: Timestamp = Timestamp {
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 const HEARTBEAT_JITTER: Duration = Duration::from_secs(30);
 
+const MACHINE_ID_PATH: &str = "etc/machine-id";
+
 #[derive(Parser)]
 struct CliArgs {
     #[clap(long = "config")]
@@ -93,12 +95,15 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     let url = config.edgebit_url();
     let token = config.edgebit_id();
+    let host_root = RootFsPath::from(config.host_root());
+    let machine_id = read_machine_id(&host_root.join(MACHINE_ID_PATH));
 
     info!("Connecting to EdgeBit at {url}");
     let mut client = platform::Client::connect(
         url.try_into()?,
         token.try_into()?,
         config.hostname(),
+        machine_id,
     ).await?;
 
     let sbom = load_sbom(&args, config.clone(), &mut client).await?;
@@ -234,6 +239,7 @@ fn to_upsert_workload_req(workload: &HostWorkload, mut extra_labels: HashMap<Str
         image: Some(pb::Image{
             kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
         }),
+        machine_id: String::new(),
     }
 }
 
@@ -260,6 +266,7 @@ async fn handle_container_started(client: &mut platform::Client, id: String, inf
                     tag: info.image.unwrap_or(String::new()),
                 })),
             }),
+            machine_id: String::new(),
     }).await;
 
     if let Err(err) = res {
@@ -322,4 +329,22 @@ async fn register_host_workload(client: &mut platform::Client, workload: &HostWo
     let req = to_upsert_workload_req(&workload, extra_labels);
     client.upsert_workload(req).await?;
     Ok(())
+}
+
+fn read_machine_id(path: &RootFsPath) -> String {
+    match std::fs::read_to_string(path.as_raw()) {
+        Ok(id) => {
+            let id = id.trim();
+            if id.len() == 32 {
+                id.to_string()
+            } else {
+                warn!("MachineID ({}) is not 32 chars long", path.display());
+                String::new()
+            }
+        },
+        Err(err) => {
+            warn!("Failed to read MachineID from {}: {err}", path.display());
+            String::new()
+        }
+    }
 }

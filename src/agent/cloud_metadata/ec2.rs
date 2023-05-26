@@ -10,18 +10,18 @@ use crate::label::*;
 #[derive(Deserialize)]
 struct InstanceIdentityDocument {
     #[serde(rename = "accountId")]
-    account_id: String,
+    account_id: Option<String>,
 
     //architecture: String,
 
     #[serde(rename = "availabilityZone")]
-    availability_zone: String,
+    availability_zone: Option<String>,
 
     #[serde(rename = "imageId")]
-    image_id: String,
+    image_id: Option<String>,
 
     #[serde(rename = "instanceId")]
-    instance_id: String,
+    instance_id: Option<String>,
 
     //#[serde(rename = "instanceType")]
     //instance_type: String,
@@ -29,7 +29,7 @@ struct InstanceIdentityDocument {
     //#[serde(rename = "privateIp")]
     //privateIp: Option<String>,
 
-    region: String,
+    region: Option<String>,
 }
 
 impl InstanceIdentityDocument {
@@ -44,7 +44,7 @@ impl InstanceIdentityDocument {
 
         let doc = client.get("/2022-09-24/dynamic/instance-identity/document").await?;
 
-        debug!("Loaded IdentityDocument: {doc}");
+        info!("Loaded identity document: {doc}");
 
         Self::from_str(&doc)
     }
@@ -66,18 +66,40 @@ impl Ec2Metadata {
 
 impl super::MetadataProvider for Ec2Metadata {
     fn host_labels(&self) -> HashMap<String, String> {
-        [
+        let mut labels: HashMap<String, String> = [
             (LABEL_CLOUD_PROVIDER.to_string(), "ec2".to_string()),
-            (LABEL_INSTANCE_ID.to_string(), self.doc.instance_id.clone()),
-            (LABEL_IMAGE_ID.to_string(), self.doc.image_id.clone()),
-            (LABEL_CLOUD_REGION.to_string(), self.doc.region.clone()),
-            (LABEL_CLOUD_ZONE.to_string(), self.doc.availability_zone.clone()),
-            (LABEL_CLOUD_ACCOUNT_ID.to_string(), self.doc.account_id.clone()),
-        ].into()
+        ].into();
+
+        if let Some(ref id) = self.doc.instance_id {
+            labels.insert(LABEL_INSTANCE_ID.to_string(), id.clone());
+        }
+
+        if let Some(ref id) = self.doc.image_id {
+            labels.insert(LABEL_IMAGE_ID.to_string(), id.clone());
+        }
+
+        if let Some(ref region) = self.doc.region {
+            labels.insert(LABEL_CLOUD_REGION.to_string(), region.clone());
+        }
+
+        if let Some(ref zone) = self.doc.availability_zone {
+            labels.insert(LABEL_CLOUD_ZONE.to_string(), zone.clone());
+        }
+
+        if let Some(ref id) = self.doc.account_id {
+            labels.insert(LABEL_CLOUD_ACCOUNT_ID.to_string(), id.clone());
+        }
+
+        labels
     }
 
     fn container_labels(&self, _id: &str) -> HashMap<String, String> {
-        self.host_labels()
+        let mut labels = self.host_labels();
+
+        // container has its own image id
+        labels.remove(LABEL_IMAGE_ID);
+
+        labels
     }
 }
 

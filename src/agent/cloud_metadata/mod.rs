@@ -4,6 +4,8 @@ mod gce;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use log::*;
+
 pub(crate) trait MetadataProvider {
     fn host_labels(&self) -> HashMap<String, String>;
 
@@ -29,16 +31,22 @@ pub struct CloudMetadata {
 
 impl CloudMetadata {
     pub async fn load() -> Self {
-        if let Ok(p) = ec2::Ec2Metadata::load().await {
-            return Self{
-                provider: Arc::new(p),
-            }
+        match ec2::Ec2Metadata::load().await {
+            Ok(p) => {
+                return Self{
+                    provider: Arc::new(p),
+                }
+            },
+            Err(err) => debug!("ec2 load metadata: {err}"),
         }
 
-        if let Ok(p) = gce::GceMetadata::load().await {
-            return Self{
-                provider: Arc::new(p),
-            }
+        match gce::GceMetadata::load().await {
+            Ok(p) => {
+                return Self{
+                    provider: Arc::new(p),
+                }
+            },
+            Err(err) => debug!("gce load metadata {err}"),
         }
 
         Self{

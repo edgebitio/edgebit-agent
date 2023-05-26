@@ -46,12 +46,12 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn connect(endpoint: Uri, deploy_token: String, hostname: String) -> Result<Self> {
+    pub async fn connect(endpoint: Uri, deploy_token: String, hostname: String, machine_id: String) -> Result<Self> {
         let channel = Channel::builder(endpoint)
             .connect()
             .await?;
 
-        let sess_keeper = SessionKeeper::new(channel.clone(), deploy_token, hostname).await?;
+        let sess_keeper = SessionKeeper::new(channel.clone(), deploy_token, hostname, machine_id).await?;
         let auth_interceptor = AuthInterceptor{token: sess_keeper.get_auth_token()};
         let sess_keeper_task = tokio::task::spawn(sess_keeper.refresh_loop());
         let inventory_svc = InventoryServiceClient::with_interceptor(channel, auth_interceptor);
@@ -121,7 +121,10 @@ impl Client {
     }
 
     pub async fn reset_workloads(&mut self) -> Result<()> {
-        self.inventory_svc.reset_workloads(pb::ResetWorkloadsRequest{}).await?;
+        self.inventory_svc.reset_workloads(pb::ResetWorkloadsRequest{
+            cluster_id: String::new(),
+            workloads: Vec::new(),
+        }).await?;
         Ok(())
     }
 
@@ -198,7 +201,7 @@ struct SessionKeeper {
 }
 
 impl SessionKeeper {
-    async fn new(channel: Channel, deploy_token: String, hostname: String) -> Result<Self> {
+    async fn new(channel: Channel, deploy_token: String, hostname: String, machine_id: String) -> Result<Self> {
         let mut token_svc = TokenServiceClient::new(channel.clone());
 
         let (refresh_token, session_token, expiration) = match RefreshToken::load() {
@@ -218,6 +221,7 @@ impl SessionKeeper {
                     deployment_token: deploy_token,
                     hostname,
                     agent_version: VERSION.to_string(),
+                    machine_id,
                 };
 
                 let resp = token_svc.enroll_agent(req)
