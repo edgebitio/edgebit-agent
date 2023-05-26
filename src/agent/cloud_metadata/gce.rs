@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
+use log::*;
 use lazy_static::lazy_static;
 use serde::Deserialize;
 use regex::Regex;
@@ -17,21 +18,21 @@ lazy_static! {
 
 #[derive(Deserialize)]
 struct Instance {
-    id: u64,
-    image: String,
-    zone: String,
+    id: Option<u64>,
+    image: Option<String>,
+    zone: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Project {
     #[serde(rename = "projectId")]
-    project_id: String,
+    project_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct MetadataDocument {
-    instance: Instance,
-    project: Project,
+    instance: Option<Instance>,
+    project: Option<Project>,
 }
 
 impl MetadataDocument {
@@ -48,6 +49,8 @@ impl MetadataDocument {
         match resp.status() {
             StatusCode::OK => {
                 let bytes = hyper::body::to_bytes(resp.into_body()).await?;
+                info!("Loaded metadata: {}", String::from_utf8_lossy(&bytes));
+
                 let doc: MetadataDocument = serde_json::from_slice(&bytes)?;
 
                 Ok(doc)
@@ -81,26 +84,46 @@ impl GceMetadata {
 impl super::MetadataProvider for GceMetadata {
     fn host_labels(&self) -> HashMap<String, String> {
         let mut labels: HashMap<String, String> = [
-            (LABEL_CLOUD_PROVIDER.to_string(), "gce".to_string()),
-            (LABEL_INSTANCE_ID.to_string(), format!("{}", self.doc.instance.id)),
-            (LABEL_IMAGE_ID.to_string(), self.doc.instance.image.clone()),
-            (LABEL_CLOUD_PROJECT_ID.to_string(), self.doc.project.project_id.clone()),
+            (LABEL_CLOUD_PROVIDER.to_string(), "gce".to_string())
         ].into();
 
-        let (region, zone) = parse_zone(&self.doc.instance.zone);
-        if let Some(region) = region {
-            labels.insert(LABEL_CLOUD_REGION.to_string(), region);
+        if let Some(ref instance) = self.doc.instance {
+            if let Some(ref id) = instance.id {
+                labels.insert(LABEL_INSTANCE_ID.to_string(), format!("{id}"));
+            }
+
+            if let Some(ref id) = instance.image {
+                labels.insert(LABEL_IMAGE_ID.to_string(), id.clone());
+            }
+
+            if let Some(ref zone) = instance.zone {
+                let (region, zone) = parse_zone(zone);
+                if let Some(region) = region {
+                    labels.insert(LABEL_CLOUD_REGION.to_string(), region);
+                }
+
+                if let Some(zone) = zone {
+                    labels.insert(LABEL_CLOUD_ZONE.to_string(), zone);
+                }
+            }
         }
 
-        if let Some(zone) = zone {
-            labels.insert(LABEL_CLOUD_ZONE.to_string(), zone);
+        if let Some(ref project) = self.doc.project {
+            if let Some(ref id) = project.project_id {
+                labels.insert(LABEL_CLOUD_PROJECT_ID.to_string(), id.clone());
+            }
         }
 
         labels
     }
 
     fn container_labels(&self, _id: &str) -> HashMap<String, String> {
-        self.host_labels()
+        let mut labels = self.host_labels();
+
+        // container has its own image id
+        labels.remove(LABEL_IMAGE_ID);
+
+        labels
     }
 }
 

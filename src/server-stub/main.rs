@@ -105,6 +105,33 @@ impl InventoryService for Service {
         Ok(Response::new(pb::UpsertWorkloadResponse{}))
     }
 
+    async fn upsert_workloads(
+        &self,
+        request: Request<pb::UpsertWorkloadsRequest>,
+    ) -> Result<Response<pb::UpsertWorkloadsResponse>, Status> {
+
+        println!("upsert_workloads: {:?}", request);
+        Ok(Response::new(pb::UpsertWorkloadsResponse{}))
+    }
+
+    async fn upsert_machines(
+        &self,
+        request: Request<pb::UpsertMachinesRequest>,
+    ) -> Result<Response<pb::UpsertMachinesResponse>, Status> {
+
+        println!("upsert_machines: {:?}", request);
+        Ok(Response::new(pb::UpsertMachinesResponse{}))
+    }
+
+    async fn upsert_clusters(
+        &self,
+        request: Request<pb::UpsertClustersRequest>,
+    ) -> Result<Response<pb::UpsertClustersResponse>, Status> {
+
+        println!("upsert_clusters: {:?}", request);
+        Ok(Response::new(pb::UpsertClustersResponse{}))
+    }
+
     async fn report_in_use(
         &self,
         request: Request<pb::ReportInUseRequest>,
