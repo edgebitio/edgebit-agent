@@ -23,7 +23,7 @@ impl TokenService for Service {
         request: Request<pb::EnrollAgentRequest>,
     ) -> Result<Response<pb::EnrollAgentResponse>, Status> {
 
-        println!("enroll_agent: {:?}", request);
+        println!("enroll_agent: {:?}", request.into_inner());
 
         let expiration = SystemTime::now() + Duration::from_secs(180);
 
@@ -35,12 +35,28 @@ impl TokenService for Service {
         Ok(Response::new(reply))
     }
 
+    async fn enroll_cluster_agent(
+        &self,
+        request: Request<pb::EnrollClusterAgentRequest>,
+    ) -> Result<Response<pb::EnrollClusterAgentResponse>, Status> {
+
+        println!("enroll_cluster_agent: {:?}", request.into_inner());
+
+        let expiration = SystemTime::now() + Duration::from_secs(180);
+
+        let reply = pb::EnrollClusterAgentResponse{
+            session_token: "SESSION_TOKEN".to_string(),
+            session_token_expiration: Some(expiration.into()),
+        };
+        Ok(Response::new(reply))
+    }
+
     async fn get_session_token(
         &self,
         request: Request<pb::GetSessionTokenRequest>,
     ) -> Result<Response<pb::GetSessionTokenResponse>, Status> {
 
-        println!("get_session_token: {:?}", request);
+        println!("get_session_token: {:?}", request.into_inner());
 
         let expiration = SystemTime::now() + Duration::from_secs(180);
 
@@ -92,7 +108,7 @@ impl InventoryService for Service {
         request: Request<pb::ResetWorkloadsRequest>,
     ) -> Result<Response<pb::ResetWorkloadsResponse>, Status> {
 
-        println!("reset_workloads: {:?}", request);
+        println!("reset_workloads: {:?}", request.into_inner());
         Ok(Response::new(pb::ResetWorkloadsResponse{}))
     }
 
@@ -101,7 +117,7 @@ impl InventoryService for Service {
         request: Request<pb::UpsertWorkloadRequest>,
     ) -> Result<Response<pb::UpsertWorkloadResponse>, Status> {
 
-        println!("upsert_workload: {:?}", request);
+        println!("upsert_workload: {:?}", request.into_inner());
         Ok(Response::new(pb::UpsertWorkloadResponse{}))
     }
 
@@ -110,7 +126,7 @@ impl InventoryService for Service {
         request: Request<pb::UpsertWorkloadsRequest>,
     ) -> Result<Response<pb::UpsertWorkloadsResponse>, Status> {
 
-        println!("upsert_workloads: {:?}", request);
+        println!("upsert_workloads: {:?}", request.into_inner());
         Ok(Response::new(pb::UpsertWorkloadsResponse{}))
     }
 
@@ -119,7 +135,7 @@ impl InventoryService for Service {
         request: Request<pb::UpsertMachinesRequest>,
     ) -> Result<Response<pb::UpsertMachinesResponse>, Status> {
 
-        println!("upsert_machines: {:?}", request);
+        println!("upsert_machines: {:?}", request.into_inner());
         Ok(Response::new(pb::UpsertMachinesResponse{}))
     }
 
@@ -128,7 +144,7 @@ impl InventoryService for Service {
         request: Request<pb::UpsertClustersRequest>,
     ) -> Result<Response<pb::UpsertClustersResponse>, Status> {
 
-        println!("upsert_clusters: {:?}", request);
+        println!("upsert_clusters: {:?}", request.into_inner());
         Ok(Response::new(pb::UpsertClustersResponse{}))
     }
 
@@ -137,7 +153,7 @@ impl InventoryService for Service {
         request: Request<pb::ReportInUseRequest>,
     ) -> Result<Response<pb::ReportInUseResponse>, Status> {
 
-        println!("report_in_use: {:?}", request);
+        println!("report_in_use: {:?}", request.into_inner());
         Ok(Response::new(pb::ReportInUseResponse{}))
     }
 }
