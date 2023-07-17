@@ -1,16 +1,16 @@
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use log::*;
 use lru::LruCache;
 
 use crate::config::Config;
-use crate::registry::PkgRef;
-use crate::open_monitor::FileOpenMonitorArc;
-use crate::scoped_path::*;
 use crate::containers::ContainerInfo;
+use crate::open_monitor::FileOpenMonitorArc;
+use crate::registry::PkgRef;
+use crate::scoped_path::*;
 
 use super::PathSet;
 
@@ -30,7 +30,7 @@ impl ContainerWorkload {
                 Ok(path) => {
                     trace!("Excluding container path {}", path.display());
                     exclude_set.add(path);
-                },
+                }
                 Err(err) => {
                     // ignore "no such file or directory" erros
                     if !super::is_not_found(&err) {
@@ -40,7 +40,7 @@ impl ContainerWorkload {
             };
         }
 
-        Ok(Self{
+        Ok(Self {
             root,
             excludes: exclude_set,
             reported: LruCache::new(super::REPORTED_LRU_SIZE),
@@ -49,8 +49,7 @@ impl ContainerWorkload {
     }
 
     fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
-        let rp = path.to_rootfs(&self.root)
-            .realpath()?;
+        let rp = path.to_rootfs(&self.root).realpath()?;
 
         if !super::is_file(&rp) {
             debug!("{} is not a file", rp.display());
@@ -82,14 +81,14 @@ impl ContainerWorkload {
             Ok(Some(filepath)) => {
                 if !self.check_and_mark_reported(filepath.clone()) {
                     // already reported, no need to do it again
-                    let pkg = PkgRef{
+                    let pkg = PkgRef {
                         id: String::new(),
                         filenames: vec![filepath],
                     };
 
                     self.in_use_batch.push(pkg);
                 }
-            },
+            }
             Ok(None) => (),
             Err(err) => {
                 debug!("{}: {err}", path.display());
@@ -142,13 +141,12 @@ impl ContainerWorkloads {
                         }
 
                         self.workloads.insert(id, workload);
-                    },
+                    }
                     Err(err) => error!("Failed to create a container workload: {err}"),
                 }
-            },
+            }
             None => error!("Container {id} started but rootfs missing"),
         }
-
     }
 
     pub fn container_stopped(&mut self, id: String, _info: ContainerInfo) {

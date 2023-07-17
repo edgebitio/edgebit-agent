@@ -1,17 +1,16 @@
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use log::*;
-use podman_api::Podman;
-use podman_api::opts::{EventsOpts, ContainerListOpts};
-use podman_api::models::Event;
 use futures::stream::StreamExt;
+use log::*;
+use podman_api::models::Event;
+use podman_api::opts::{ContainerListOpts, EventsOpts};
+use podman_api::Podman;
 
 use super::{ContainerEventsPtr, ContainerInfo};
-use crate::scoped_path::*;
 use crate::cloud_metadata::CloudMetadata;
+use crate::scoped_path::*;
 
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay";
 const EVENT_TYPE_CONTAINER: &str = "container";
@@ -31,7 +30,7 @@ impl PodmanTracker {
                 Ok(_) => {
                     info!("Connected to Podman daemon");
                     break;
-                },
+                }
                 Err(err) => {
                     if quiet {
                         debug!("Failed to connect to Podman daemon: {err}");
@@ -45,13 +44,11 @@ impl PodmanTracker {
             }
         }
 
-        Ok(Self{
-            podman,
-        })
+        Ok(Self { podman })
     }
 
     pub async fn track(self, cloud_meta: CloudMetadata, events: ContainerEventsPtr) -> Result<()> {
-        let tracker = Arc::new(Tracker{
+        let tracker = Arc::new(Tracker {
             podman: self.podman,
             cloud_meta,
             events,
@@ -71,7 +68,6 @@ impl PodmanTracker {
 
         Ok(())
     }
-
 }
 
 struct Tracker {
@@ -82,12 +78,12 @@ struct Tracker {
 
 impl Tracker {
     async fn stream_events(&self) {
-        let filter = ("event".to_string(), vec!["start".to_string(), "died".to_string()]);
+        let filter = (
+            "event".to_string(),
+            vec!["start".to_string(), "died".to_string()],
+        );
 
-        let opts = EventsOpts::builder()
-            .stream(true)
-            .filters([filter])
-            .build();
+        let opts = EventsOpts::builder().stream(true).filters([filter]).build();
 
         let mut stream = self.podman.events(&opts);
 
@@ -114,23 +110,22 @@ impl Tracker {
                     match self.inspect_container(&id).await {
                         Ok(info) => {
                             self.events.container_started(id, info).await;
-                        },
+                        }
                         Err(err) => {
                             error!("Failed to inspect container(id={id}): {err}");
                         }
                     }
-                },
+                }
                 "died" => {
                     self.events.container_stopped(id, msg.time.into()).await;
-                },
+                }
                 _ => (),
             }
         }
     }
 
     async fn load_running(&self) -> Result<()> {
-        let opts = ContainerListOpts::builder()
-            .build();
+        let opts = ContainerListOpts::builder().build();
 
         let conts = self.podman.containers().list(&opts).await?;
 
@@ -144,7 +139,7 @@ impl Tracker {
                 Ok(info) => {
                     debug!("Container {id}: {info:?}");
                     self.events.container_started(id, info).await;
-                },
+                }
                 Err(err) => {
                     error!("Podman inspect_container({id}): {err}");
                     continue;
@@ -156,57 +151,52 @@ impl Tracker {
     }
 
     async fn inspect_container(&self, id: &str) -> Result<ContainerInfo> {
-        let cont_resp = self.podman.containers()
-            .get(id)
-            .inspect()
-            .await?;
+        let cont_resp = self.podman.containers().get(id).inspect().await?;
 
         let rootfs = match cont_resp.graph_driver {
             Some(driver) => {
-                if driver.name.is_none() || driver.name.as_ref().unwrap() == GRAPH_DRIVER_OVERLAYFS {
+                if driver.name.is_none() || driver.name.as_ref().unwrap() == GRAPH_DRIVER_OVERLAYFS
+                {
                     match driver.data {
-                        Some(mut data) => {
-                            data.remove("MergedDir")
-                                .map(HostPath::from)
-                        },
+                        Some(mut data) => data.remove("MergedDir").map(HostPath::from),
                         None => {
                             error!("Container id={id}: graph driver data missing");
                             None
                         }
                     }
                 } else {
-                    error!("Container id={id}: unknown graph driver: {}", driver.name.unwrap());
+                    error!(
+                        "Container id={id}: unknown graph driver: {}",
+                        driver.name.unwrap()
+                    );
                     None
                 }
-            },
+            }
             None => None,
         };
 
         let (start_time, end_time) = match cont_resp.state {
             Some(state) => {
-                let started_at = state.started_at
-                    .map(|t| t.into());
+                let started_at = state.started_at.map(|t| t.into());
 
                 let finished_at = match state.status.as_deref() {
                     Some("running") | Some("paused") => None,
-                    _ => {
-                        state.finished_at
-                            .map(|t| t.into())
-                    }
+                    _ => state.finished_at.map(|t| t.into()),
                 };
 
                 (started_at, finished_at)
-            },
-            None => (None, None)
+            }
+            None => (None, None),
         };
 
-        let mounts = cont_resp.mounts
+        let mounts = cont_resp
+            .mounts
             .unwrap_or_default()
             .into_iter()
             .filter_map(|m| m.destination.map(|d| d.into()))
             .collect();
 
-        Ok(ContainerInfo{
+        Ok(ContainerInfo {
             name: cont_resp.name,
             image_id: cont_resp.image,
             image: cont_resp.image_name,

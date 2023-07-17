@@ -1,31 +1,31 @@
 use std::io::Read;
-use std::sync::{Mutex, Arc};
-use std::time::{SystemTime, Duration};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
-use anyhow::{Result, anyhow};
-use log::*;
-use futures::Stream;
-use futures::stream::StreamExt;
+use anyhow::{anyhow, Result};
 use async_stream::stream;
-use tonic::{Request, Status};
+use futures::stream::StreamExt;
+use futures::Stream;
+use log::*;
+use tokio::task::JoinHandle;
 use tonic::codegen::InterceptedService;
+use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
 use tonic::transport::{Channel, Uri};
-use tonic::metadata::AsciiMetadataValue;
-use tokio::task::JoinHandle;
+use tonic::{Request, Status};
 
 pub mod pb {
     tonic::include_proto!("edgebit.agent.v1alpha");
 }
 
-use pb::token_service_client::TokenServiceClient;
 use pb::inventory_service_client::InventoryServiceClient;
+use pb::token_service_client::TokenServiceClient;
 
 use crate::registry::PkgRef;
 use crate::version::VERSION;
 
-const EXPIRATION_SLACK: Duration = Duration::from_secs(10*60);
-const DEFAULT_EXPIRATION: Duration = Duration::from_secs(60*60);
+const EXPIRATION_SLACK: Duration = Duration::from_secs(10 * 60);
+const DEFAULT_EXPIRATION: Duration = Duration::from_secs(60 * 60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct Client {
@@ -34,57 +34,83 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn connect(endpoint: Uri, deploy_token: String, hostname: String, machine_id: String) -> Result<Self> {
-        let channel = Channel::builder(endpoint)
-            .connect()
-            .await?;
+    pub async fn connect(
+        endpoint: Uri,
+        deploy_token: String,
+        hostname: String,
+        machine_id: String,
+    ) -> Result<Self> {
+        let channel = Channel::builder(endpoint).connect().await?;
 
-        let mut token = enroll_loop(channel.clone(), deploy_token.clone(), hostname.clone(), machine_id.clone()).await;
+        let mut token = enroll_loop(
+            channel.clone(),
+            deploy_token.clone(),
+            hostname.clone(),
+            machine_id.clone(),
+        )
+        .await;
 
         let auth_token = AuthToken::new(&token.session_token);
 
-        let inventory_svc = InventoryServiceClient::with_interceptor(channel.clone(), auth_token.clone());
+        let inventory_svc =
+            InventoryServiceClient::with_interceptor(channel.clone(), auth_token.clone());
 
         let sess_keeper_task = tokio::task::spawn(async move {
-            while let Err(err) = refresh_loop(channel.clone(), token.refresh_token.clone(), auth_token.clone(), token.expiration).await
+            while let Err(err) = refresh_loop(
+                channel.clone(),
+                token.refresh_token.clone(),
+                auth_token.clone(),
+                token.expiration,
+            )
+            .await
             {
                 error!("Session renewal failed: {err}");
 
                 // try re-enrolling
-                token = enroll_loop(channel.clone(), deploy_token.clone(), hostname.clone(), machine_id.clone()).await;
+                token = enroll_loop(
+                    channel.clone(),
+                    deploy_token.clone(),
+                    hostname.clone(),
+                    machine_id.clone(),
+                )
+                .await;
                 auth_token.set(&token.session_token);
             }
         });
 
-        Ok(Self{
+        Ok(Self {
             inventory_svc,
             sess_keeper_task,
         })
     }
 
-    pub async fn upload_sbom(&mut self, image_id: String, sbom_reader: std::fs::File) -> Result<()> {
+    pub async fn upload_sbom(
+        &mut self,
+        image_id: String,
+        sbom_reader: std::fs::File,
+    ) -> Result<()> {
         // Header first
-        let header_req = pb::UploadSbomRequest{
+        let header_req = pb::UploadSbomRequest {
             kind: Some(pb::upload_sbom_request::Kind::Header(
-                pb::UploadSbomHeader{
+                pb::UploadSbomHeader {
                     format: pb::SbomFormat::Syft as i32,
                     image_id,
-                    image: Some(pb::Image{
-                        kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
+                    image: Some(pb::Image {
+                        kind: Some(pb::image::Kind::Generic(pb::GenericImage {})),
                     }),
                 },
             )),
         };
 
-        let header_stream = futures::stream::once(
-            futures::future::ready(header_req)
-        );
+        let header_stream = futures::stream::once(futures::future::ready(header_req));
 
         // TODO: There must be a simpler way to deal with a stream causing an error
         let result = Arc::new(Mutex::new(Result::Ok(())));
         let stream = header_stream.chain(data_stream(sbom_reader, result.clone()));
 
-        self.inventory_svc.upload_sbom(stream).await
+        self.inventory_svc
+            .upload_sbom(stream)
+            .await
             .map_err(|e| anyhow!("{}", e.message()))?;
 
         std::sync::Arc::<std::sync::Mutex<Result<(), anyhow::Error>>>::try_unwrap(result)
@@ -94,40 +120,45 @@ impl Client {
     }
 
     pub async fn upsert_workload(&mut self, workload: pb::UpsertWorkloadRequest) -> Result<()> {
-        self.inventory_svc.upsert_workload(workload).await
+        self.inventory_svc
+            .upsert_workload(workload)
+            .await
             .map_err(|e| anyhow!("{}", e.message()))?;
         Ok(())
     }
 
     pub async fn report_in_use(&mut self, workload_id: String, pkgs: Vec<PkgRef>) -> Result<()> {
-        let in_use = pkgs.into_iter()
-            .map(|p| {
-                pb::PkgInUse{
-                    id: p.id,
-                    files: p.filenames
-                        .iter()
-                        .filter_map(|f| f.as_raw().to_str().map(|f| f.to_string()))
-                        .collect()
-                }
+        let in_use = pkgs
+            .into_iter()
+            .map(|p| pb::PkgInUse {
+                id: p.id,
+                files: p
+                    .filenames
+                    .iter()
+                    .filter_map(|f| f.as_raw().to_str().map(|f| f.to_string()))
+                    .collect(),
             })
             .collect();
 
-        let req = pb::ReportInUseRequest{
+        let req = pb::ReportInUseRequest {
             in_use,
             workload_id,
         };
 
         trace!("ReportInUse: {req:?}");
-        self.inventory_svc.report_in_use(req).await
+        self.inventory_svc
+            .report_in_use(req)
+            .await
             .map_err(|e| anyhow!("{}", e.message()))?;
         Ok(())
     }
 
     pub async fn reset_workloads(&mut self) -> Result<()> {
-        self.inventory_svc.reset_workloads(pb::ResetWorkloadsRequest{
-            cluster_id: String::new(),
-            workloads: Vec::new(),
-        })
+        self.inventory_svc
+            .reset_workloads(pb::ResetWorkloadsRequest {
+                cluster_id: String::new(),
+                workloads: Vec::new(),
+            })
             .await
             .map_err(|e| anyhow!("{}", e.message()))?;
         Ok(())
@@ -182,7 +213,12 @@ struct EnrolledToken {
     expiration: SystemTime,
 }
 
-async fn enroll(channel: Channel, deploy_token: String, hostname: String, machine_id: String) -> Result<EnrolledToken> {
+async fn enroll(
+    channel: Channel,
+    deploy_token: String,
+    hostname: String,
+    machine_id: String,
+) -> Result<EnrolledToken> {
     let mut token_svc = TokenServiceClient::new(channel);
 
     let req = pb::EnrollAgentRequest {
@@ -192,7 +228,9 @@ async fn enroll(channel: Channel, deploy_token: String, hostname: String, machin
         machine_id,
     };
 
-    let resp = token_svc.enroll_agent(req).await
+    let resp = token_svc
+        .enroll_agent(req)
+        .await
         .map_err(|e| anyhow!("{}", e.message()))?
         .into_inner();
 
@@ -200,16 +238,28 @@ async fn enroll(channel: Channel, deploy_token: String, hostname: String, machin
     _ = AsciiMetadataValue::try_from(&resp.session_token)
         .map_err(|_| anyhow!("session token is not ASCII"))?;
 
-    Ok(EnrolledToken{
+    Ok(EnrolledToken {
         refresh_token: resp.refresh_token,
         session_token: resp.session_token,
         expiration: get_expiration(resp.session_token_expiration),
     })
 }
 
-async fn enroll_loop(channel: Channel, deploy_token: String, hostname: String, machine_id: String) -> EnrolledToken {
+async fn enroll_loop(
+    channel: Channel,
+    deploy_token: String,
+    hostname: String,
+    machine_id: String,
+) -> EnrolledToken {
     loop {
-        match enroll(channel.clone(), deploy_token.clone(), hostname.clone(), machine_id.clone()).await {
+        match enroll(
+            channel.clone(),
+            deploy_token.clone(),
+            hostname.clone(),
+            machine_id.clone(),
+        )
+        .await
+        {
             Ok(tok) => return tok,
             Err(err) => {
                 error!("Agent enrollment failed: {err}");
@@ -244,7 +294,9 @@ async fn refresh_loop(
             agent_version: VERSION.to_string(),
         };
 
-        let resp = token_svc.get_session_token(req).await
+        let resp = token_svc
+            .get_session_token(req)
+            .await
             .map_err(|e| anyhow!("{}", e.message()))?
             .into_inner();
 
@@ -275,8 +327,11 @@ fn get_expiration(expiration: Option<prost_types::Timestamp>) -> SystemTime {
     }
 }
 
-fn data_stream<'a, R: Read + Send + 'a>(mut rd: R, result: Arc<Mutex<Result<()>>>) -> impl Stream<Item=pb::UploadSbomRequest> + Send {
-    stream!{
+fn data_stream<'a, R: Read + Send + 'a>(
+    mut rd: R,
+    result: Arc<Mutex<Result<()>>>,
+) -> impl Stream<Item = pb::UploadSbomRequest> + Send {
+    stream! {
         let mut buf = vec![0u8; 64*1024];
         loop {
             match rd.read(&mut buf) {

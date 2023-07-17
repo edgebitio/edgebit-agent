@@ -1,12 +1,12 @@
-use std::time::Duration;
+use std::ffi::{c_char, CStr};
 use std::sync::{Arc, Mutex};
-use std::ffi::{CStr, c_char};
+use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use libbpf_rs::{MapFlags, PerfBufferBuilder};
+use log::*;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
-use log::*;
-use libbpf_rs::{PerfBufferBuilder, MapFlags};
 
 use crate::fanotify::Fanotify;
 use crate::scoped_path::*;
@@ -44,14 +44,17 @@ impl BpfProbes {
 
         loop {
             let skel_builder = probes::ProbesSkelBuilder::default();
-            let mut open_skel = skel_builder.open()
+            let mut open_skel = skel_builder
+                .open()
                 .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
 
-            open_skel.progs_mut()
+            open_skel
+                .progs_mut()
                 .enter_openat2()
                 .set_autoload(with_optional)?;
 
-            open_skel.progs_mut()
+            open_skel
+                .progs_mut()
                 .exit_openat2()
                 .set_autoload(with_optional)?;
 
@@ -59,7 +62,9 @@ impl BpfProbes {
                 Ok(skel) => skel,
                 Err(err) => {
                     if with_optional {
-                        info!("Loading of BPF probes failed, retrying with optional probes disabled");
+                        info!(
+                            "Loading of BPF probes failed, retrying with optional probes disabled"
+                        );
                         // if it failed on first try, disable optional programs and try again
                         with_optional = false;
                         continue;
@@ -82,13 +87,15 @@ impl BpfProbes {
 
             return Ok(Self {
                 skel: Arc::new(Mutex::new(skel)),
-            })
+            });
         }
     }
 
     fn lookup_cgroup(&self, pid: u32) -> Result<Option<String>> {
         let key = pid.to_ne_bytes();
-        let val = self.skel.lock()
+        let val = self
+            .skel
+            .lock()
             .unwrap()
             .maps()
             .pid_to_info()
@@ -98,20 +105,21 @@ impl BpfProbes {
         Ok(match val {
             Some(bytes) => {
                 let bytes: &[u8] = &bytes;
-                let info: ProcessInfo = bytes.try_into()
+                let info: ProcessInfo = bytes
+                    .try_into()
                     .map_err(|_| anyhow!("error casting bytes into ProcessInfo"))?;
 
-                let cgroup = info.cgroup_path()?
-                    .to_string();
+                let cgroup = info.cgroup_path()?.to_string();
 
                 Some(cgroup)
-            },
+            }
             None => None,
         })
     }
 
     fn remove_pid(&self, pid: &[u8]) -> Result<()> {
-        self.skel.lock()
+        self.skel
+            .lock()
             .unwrap()
             .maps_mut()
             .pid_to_info()
@@ -122,11 +130,10 @@ impl BpfProbes {
     }
 
     fn watch_zombies<F>(&self, callback: F) -> JoinHandle<Result<()>>
-    where F: Send + Sync + Fn(&[u8]) + 'static
+    where
+        F: Send + Sync + Fn(&[u8]) + 'static,
     {
-        let cb = Box::new(move |_cpu, buf: &[u8]| {
-           callback(buf)
-        });
+        let cb = Box::new(move |_cpu, buf: &[u8]| callback(buf));
 
         let skel = self.skel.clone();
 
@@ -139,10 +146,10 @@ impl BpfProbes {
                     .pages(ZOMBIE_EVENTS_BUF_SIZE)
                     .sample_cb(cb)
                     .lost_cb(handle_lost_events)
-                    .build() {
-
+                    .build()
+                {
                     Ok(zombies) => zombies,
-                    Err(err) => return Err(anyhow::Error::from(err))
+                    Err(err) => return Err(anyhow::Error::from(err)),
                 }
             };
 
@@ -153,11 +160,10 @@ impl BpfProbes {
     }
 
     fn watch_opens<F>(&self, callback: F) -> JoinHandle<Result<()>>
-    where F: Send + Sync + Fn(&[u8]) + 'static
+    where
+        F: Send + Sync + Fn(&[u8]) + 'static,
     {
-        let cb = Box::new(move |_cpu, buf: &[u8]| {
-           callback(buf)
-        });
+        let cb = Box::new(move |_cpu, buf: &[u8]| callback(buf));
 
         let skel = self.skel.clone();
 
@@ -170,10 +176,10 @@ impl BpfProbes {
                     .pages(OPEN_EVENTS_BUF_SIZE)
                     .sample_cb(cb)
                     .lost_cb(handle_lost_events)
-                    .build() {
-
+                    .build()
+                {
                     Ok(zombies) => zombies,
-                    Err(err) => return Err(anyhow::Error::from(err))
+                    Err(err) => return Err(anyhow::Error::from(err)),
                 }
             };
 
@@ -197,12 +203,18 @@ struct ProcessInfo {
 
 impl ProcessInfo {
     fn cgroup_path(&self) -> Result<&str> {
-        let nul = self.cgroup.iter()
+        let nul = self
+            .cgroup
+            .iter()
             .position(|b| *b == 0u8)
             .unwrap_or(self.cgroup.len());
 
-        let cg = std::str::from_utf8(&self.cgroup[..nul])
-            .map_err(|_| anyhow!("cgroup name with non-UTF8 characters: {:?}", &self.cgroup[..nul]))?;
+        let cg = std::str::from_utf8(&self.cgroup[..nul]).map_err(|_| {
+            anyhow!(
+                "cgroup name with non-UTF8 characters: {:?}",
+                &self.cgroup[..nul]
+            )
+        })?;
 
         Ok(cg)
     }
@@ -214,7 +226,7 @@ impl TryFrom<&[u8]> for ProcessInfo {
     fn try_from(buf: &[u8]) -> Result<Self, ()> {
         let sz = core::mem::size_of::<Self>();
         if buf.len() < sz {
-            return Err(())
+            return Err(());
         }
 
         let val = unsafe { *(buf.as_ptr() as *const Self) };
@@ -235,9 +247,8 @@ impl OpenMonitor {
         let fan = Arc::new(Fanotify::new()?);
         let probes = BpfProbes::load()?;
 
-        let fan_task = tokio::task::spawn(
-            monitor_fanotify(fan.clone(), probes.clone(), ch.clone())
-        );
+        let fan_task =
+            tokio::task::spawn(monitor_fanotify(fan.clone(), probes.clone(), ch.clone()));
 
         let opens_task = monitor_bpf_open_events(probes.clone(), ch);
 
@@ -313,7 +324,7 @@ async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<Open
 
             let cgroup_name = match probes.lookup_cgroup(e.pid as u32) {
                 Ok(cgroup) => cgroup,
-                Err(err) =>  {
+                Err(err) => {
                     error!("lookup_cgroup: {err}");
                     None
                 }
@@ -341,7 +352,7 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
 
         let cgroup_name = match probes2.lookup_cgroup(pid) {
             Ok(cgroup) => cgroup,
-            Err(err) =>  {
+            Err(err) => {
                 error!("lookup_cgroup: {err}");
                 None
             }
@@ -375,9 +386,9 @@ fn bump_rlimit() -> Result<()> {
     nix::sys::resource::setrlimit(
         Resource::RLIMIT_MEMLOCK,
         nix::sys::resource::RLIM_INFINITY,
-        nix::sys::resource::RLIM_INFINITY
+        nix::sys::resource::RLIM_INFINITY,
     )
-        .map_err(|err| anyhow!("failed to raise lock memory rlimit: {err}"))?;
+    .map_err(|err| anyhow!("failed to raise lock memory rlimit: {err}"))?;
 
     Ok(())
 }

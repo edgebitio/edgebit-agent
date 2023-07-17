@@ -1,17 +1,17 @@
 use std::sync::Arc;
-use std::time::{SystemTime, Duration};
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
-use tonic::{Request, Response, Status, Streaming};
 use tonic::transport::Server;
+use tonic::{Request, Response, Status, Streaming};
 
 pub mod pb {
     tonic::include_proto!("edgebit.agent.v1alpha");
     pub use ::prost_types::Timestamp;
 }
 
-use pb::token_service_server::{TokenService, TokenServiceServer};
 use pb::inventory_service_server::{InventoryService, InventoryServiceServer};
+use pb::token_service_server::{TokenService, TokenServiceServer};
 
 #[derive(Debug, Default)]
 pub struct Service {}
@@ -22,12 +22,11 @@ impl TokenService for Service {
         &self,
         request: Request<pb::EnrollAgentRequest>,
     ) -> Result<Response<pb::EnrollAgentResponse>, Status> {
-
         println!("enroll_agent: {:?}", request.into_inner());
 
         let expiration = SystemTime::now() + Duration::from_secs(180);
 
-        let reply = pb::EnrollAgentResponse{
+        let reply = pb::EnrollAgentResponse {
             refresh_token: "REFRESH_TOKEN".to_string(),
             session_token: "SESSION_TOKEN".to_string(),
             session_token_expiration: Some(expiration.into()),
@@ -39,12 +38,11 @@ impl TokenService for Service {
         &self,
         request: Request<pb::EnrollClusterAgentRequest>,
     ) -> Result<Response<pb::EnrollClusterAgentResponse>, Status> {
-
         println!("enroll_cluster_agent: {:?}", request.into_inner());
 
         let expiration = SystemTime::now() + Duration::from_secs(180);
 
-        let reply = pb::EnrollClusterAgentResponse{
+        let reply = pb::EnrollClusterAgentResponse {
             session_token: "SESSION_TOKEN".to_string(),
             session_token_expiration: Some(expiration.into()),
         };
@@ -55,12 +53,11 @@ impl TokenService for Service {
         &self,
         request: Request<pb::GetSessionTokenRequest>,
     ) -> Result<Response<pb::GetSessionTokenResponse>, Status> {
-
         println!("get_session_token: {:?}", request.into_inner());
 
         let expiration = SystemTime::now() + Duration::from_secs(180);
 
-        let reply = pb::GetSessionTokenResponse{
+        let reply = pb::GetSessionTokenResponse {
             session_token: "SESSION_TOKEN".to_string(),
             session_token_expiration: Some(expiration.into()),
         };
@@ -79,26 +76,26 @@ impl InventoryService for Service {
 
         loop {
             match request.message().await {
-                Ok(Some(msg)) => {
-                    match msg.kind {
-                        Some(pb::upload_sbom_request::Kind::Header(hdr)) => {
-                            println!("upload_sbom: {hdr:?}");
-                        },
-
-                        Some(pb::upload_sbom_request::Kind::Data(mut part)) => {
-                            whole.append(&mut part);
-                        },
-
-                        _ => (),
+                Ok(Some(msg)) => match msg.kind {
+                    Some(pb::upload_sbom_request::Kind::Header(hdr)) => {
+                        println!("upload_sbom: {hdr:?}");
                     }
+
+                    Some(pb::upload_sbom_request::Kind::Data(mut part)) => {
+                        whole.append(&mut part);
+                    }
+
+                    _ => (),
                 },
 
                 Ok(None) => {
                     println!("upload_sbom: len={}", whole.len());
-                    return Ok(Response::new(pb::UploadSbomResponse{}));
-                },
+                    return Ok(Response::new(pb::UploadSbomResponse {}));
+                }
 
-                Err(e) => { return Err(e); },
+                Err(e) => {
+                    return Err(e);
+                }
             }
         }
     }
@@ -107,54 +104,48 @@ impl InventoryService for Service {
         &self,
         request: Request<pb::ResetWorkloadsRequest>,
     ) -> Result<Response<pb::ResetWorkloadsResponse>, Status> {
-
         println!("reset_workloads: {:?}", request.into_inner());
-        Ok(Response::new(pb::ResetWorkloadsResponse{}))
+        Ok(Response::new(pb::ResetWorkloadsResponse {}))
     }
 
     async fn upsert_workload(
         &self,
         request: Request<pb::UpsertWorkloadRequest>,
     ) -> Result<Response<pb::UpsertWorkloadResponse>, Status> {
-
         println!("upsert_workload: {:?}", request.into_inner());
-        Ok(Response::new(pb::UpsertWorkloadResponse{}))
+        Ok(Response::new(pb::UpsertWorkloadResponse {}))
     }
 
     async fn upsert_workloads(
         &self,
         request: Request<pb::UpsertWorkloadsRequest>,
     ) -> Result<Response<pb::UpsertWorkloadsResponse>, Status> {
-
         println!("upsert_workloads: {:?}", request.into_inner());
-        Ok(Response::new(pb::UpsertWorkloadsResponse{}))
+        Ok(Response::new(pb::UpsertWorkloadsResponse {}))
     }
 
     async fn upsert_machines(
         &self,
         request: Request<pb::UpsertMachinesRequest>,
     ) -> Result<Response<pb::UpsertMachinesResponse>, Status> {
-
         println!("upsert_machines: {:?}", request.into_inner());
-        Ok(Response::new(pb::UpsertMachinesResponse{}))
+        Ok(Response::new(pb::UpsertMachinesResponse {}))
     }
 
     async fn upsert_clusters(
         &self,
         request: Request<pb::UpsertClustersRequest>,
     ) -> Result<Response<pb::UpsertClustersResponse>, Status> {
-
         println!("upsert_clusters: {:?}", request.into_inner());
-        Ok(Response::new(pb::UpsertClustersResponse{}))
+        Ok(Response::new(pb::UpsertClustersResponse {}))
     }
 
     async fn report_in_use(
         &self,
         request: Request<pb::ReportInUseRequest>,
     ) -> Result<Response<pb::ReportInUseResponse>, Status> {
-
         println!("report_in_use: {:?}", request.into_inner());
-        Ok(Response::new(pb::ReportInUseResponse{}))
+        Ok(Response::new(pb::ReportInUseResponse {}))
     }
 }
 

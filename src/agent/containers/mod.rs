@@ -1,31 +1,31 @@
 pub mod docker;
-pub mod podman;
 pub mod k8s_containerd;
+pub mod podman;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, Duration};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
-use anyhow::{Result, anyhow};
-use log::*;
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use lazy_static::lazy_static;
+use log::*;
 use regex::Regex;
+use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
-use tokio::net::{UnixStream, TcpStream};
-use async_trait::async_trait;
 use tonic::transport::channel::Channel;
-use tonic::transport::{Uri, Endpoint};
+use tonic::transport::{Endpoint, Uri};
 use tower::service_fn;
 
 use docker::DockerTracker;
-use podman::PodmanTracker;
 use k8s_containerd::K8sContainerdTracker;
+use podman::PodmanTracker;
 
+use crate::cloud_metadata::CloudMetadata;
 use crate::config::Config;
 use crate::scoped_path::*;
-use crate::cloud_metadata::CloudMetadata;
 
 // Docker containers will contain the id somewhere in the cgroup name
 const CONTAINER_CLEANUP_LAG: Duration = Duration::from_secs(10);
@@ -101,14 +101,16 @@ impl Containers {
                         info!("Podman detected, reconnecting");
                         match PodmanTracker::connect(&host).await {
                             Ok(tracker) => {
-                                if let Err(err) = tracker.track(cloud_meta.clone(), ev.clone()).await {
+                                if let Err(err) =
+                                    tracker.track(cloud_meta.clone(), ev.clone()).await
+                                {
                                     error!("Container monitoring: {err}");
                                 }
-                            },
+                            }
 
                             Err(err) => error!("Failed to connect to podman: {err}"),
                         }
-                    },
+                    }
                     _ => {
                         if let Err(err) = tracker.track(cloud_meta.clone(), ev.clone()).await {
                             error!("Container monitoring: {err}");
@@ -153,9 +155,7 @@ impl Containers {
     }
 
     pub fn all(&self) -> ContainerMap {
-        self.inner.cont_map.lock()
-            .unwrap()
-            .clone()
+        self.inner.cont_map.lock().unwrap().clone()
     }
 }
 
@@ -170,11 +170,15 @@ impl ContainerRuntimeEvents for Inner {
     async fn container_started(&self, id: String, info: ContainerInfo) {
         info!("Container started {id}: {info:?}");
 
-        self.cont_map.lock()
+        self.cont_map
+            .lock()
             .unwrap()
             .insert(id.clone(), info.clone());
 
-        self.ch.send(ContainerEvent::Started(id, info)).await.unwrap();
+        self.ch
+            .send(ContainerEvent::Started(id, info))
+            .await
+            .unwrap();
     }
 
     async fn container_stopped(&self, id: String, stop_time: SystemTime) {
@@ -190,9 +194,7 @@ impl ContainerRuntimeEvents for Inner {
             tokio::task::spawn(async move {
                 tokio::time::sleep(CONTAINER_CLEANUP_LAG).await;
 
-                let info = {
-                    cont_map.lock().unwrap().remove(&id)
-                };
+                let info = { cont_map.lock().unwrap().remove(&id) };
 
                 if let Some(mut info) = info {
                     info.end_time = Some(stop_time);
@@ -210,15 +212,18 @@ pub async fn grpc_connect(host: &str) -> Result<Channel> {
 
     let ep = Endpoint::try_from("http://[::]").unwrap();
 
-    let addr = host.strip_prefix("tcp://")
+    let addr = host
+        .strip_prefix("tcp://")
         .or_else(|| host.strip_prefix("http://"));
 
     let ch = if let Some(addr) = addr {
         let host = addr.to_string();
-        ep.connect_with_connector(service_fn(move |_: Uri| TcpStream::connect(host.clone()))).await?
+        ep.connect_with_connector(service_fn(move |_: Uri| TcpStream::connect(host.clone())))
+            .await?
     } else if let Some(addr) = host.strip_prefix("unix://") {
         let path = PathBuf::from(addr);
-        ep.connect_with_connector(service_fn(move |_: Uri| UnixStream::connect(path.clone()))).await?
+        ep.connect_with_connector(service_fn(move |_: Uri| UnixStream::connect(path.clone())))
+            .await?
     } else {
         return Err(anyhow!("Unsupported host scheme: {host}"));
     };

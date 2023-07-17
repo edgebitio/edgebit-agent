@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, anyhow};
-use log::*;
+use anyhow::{anyhow, Result};
+use hyper::{Body, Client, Method, Request, StatusCode};
 use lazy_static::lazy_static;
-use serde::Deserialize;
+use log::*;
 use regex::Regex;
-use hyper::{Client, Request, Body, StatusCode, Method};
+use serde::Deserialize;
 
 use crate::label::*;
 
@@ -54,10 +54,8 @@ impl MetadataDocument {
                 let doc: MetadataDocument = serde_json::from_slice(&bytes)?;
 
                 Ok(doc)
-            },
-            code => {
-                Err(anyhow!("Non-200 response: {code}"))
             }
+            code => Err(anyhow!("Non-200 response: {code}")),
         }
     }
 }
@@ -71,9 +69,7 @@ impl GceMetadata {
         let url = format!("http://{host}/computeMetadata/v1/?recursive=true");
         let doc = MetadataDocument::load(&url).await?;
 
-        Ok(GceMetadata{
-            doc,
-        })
+        Ok(GceMetadata { doc })
     }
 
     pub async fn load() -> Result<Self> {
@@ -83,9 +79,8 @@ impl GceMetadata {
 
 impl super::MetadataProvider for GceMetadata {
     fn host_labels(&self) -> HashMap<String, String> {
-        let mut labels: HashMap<String, String> = [
-            (LABEL_CLOUD_PROVIDER.to_string(), "gce".to_string())
-        ].into();
+        let mut labels: HashMap<String, String> =
+            [(LABEL_CLOUD_PROVIDER.to_string(), "gce".to_string())].into();
 
         if let Some(ref instance) = self.doc.instance {
             if let Some(ref id) = instance.id {
@@ -130,26 +125,24 @@ impl super::MetadataProvider for GceMetadata {
 fn parse_zone(val: &str) -> (Option<String>, Option<String>) {
     match ZONE_RE.captures(val) {
         Some(groups) => {
-            let zone = groups.get(1)
-                .unwrap()
-                .as_str();
+            let zone = groups.get(1).unwrap().as_str();
 
             // to get the region, strip off the zone at the end
             match zone.rsplit_once('-') {
                 Some((region, _)) => (Some(region.to_string()), Some(zone.to_string())),
                 None => (None, Some(zone.to_string())),
             }
-        },
-        None => (None, None)
+        }
+        None => (None, None),
     }
 }
 #[cfg(test)]
 mod tests {
-    use std::net::{SocketAddr};
+    use std::net::SocketAddr;
 
     use assert2::assert;
-    use hyper::{Server, Response};
     use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Response, Server};
 
     use super::*;
 
@@ -216,8 +209,15 @@ mod tests {
   }
 }"#;
 
-    async fn mock_metadata_svc(req: Request<Body>) -> std::result::Result<Response<Body>, hyper::Error> {
-        let flavor = req.headers().get("Metadata-Flavor").unwrap().to_str().unwrap();
+    async fn mock_metadata_svc(
+        req: Request<Body>,
+    ) -> std::result::Result<Response<Body>, hyper::Error> {
+        let flavor = req
+            .headers()
+            .get("Metadata-Flavor")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(flavor == "Google");
 
         assert!(req.uri() == "/computeMetadata/v1/?recursive=true");
@@ -227,8 +227,7 @@ mod tests {
         Ok(Response::builder()
             .status(StatusCode::OK)
             .body(resp_body)
-            .unwrap()
-        )
+            .unwrap())
     }
 
     #[tokio::test]
@@ -237,9 +236,8 @@ mod tests {
 
         let addr = SocketAddr::V4("127.0.0.1:9992".parse().unwrap());
 
-        let make_svc = make_service_fn(|_| async {
-            Ok::<_, hyper::Error>(service_fn(mock_metadata_svc))
-        });
+        let make_svc =
+            make_service_fn(|_| async { Ok::<_, hyper::Error>(service_fn(mock_metadata_svc)) });
         let server = Server::bind(&addr).serve(make_svc);
         let server_task = tokio::task::spawn(server);
 

@@ -33,23 +33,23 @@ impl CloudMetadata {
     pub async fn load() -> Self {
         match ec2::Ec2Metadata::load().await {
             Ok(p) => {
-                return Self{
+                return Self {
                     provider: Arc::new(p),
                 }
-            },
+            }
             Err(err) => debug!("ec2 load metadata: {err}"),
         }
 
         match gce::GceMetadata::load().await {
             Ok(p) => {
-                return Self{
+                return Self {
                     provider: Arc::new(p),
                 }
-            },
+            }
             Err(err) => debug!("gce load metadata {err}"),
         }
 
-        Self{
+        Self {
             provider: Arc::new(NullProvider),
         }
     }

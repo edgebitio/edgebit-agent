@@ -1,17 +1,17 @@
-use std::path::{PathBuf, Path};
 use std::io::BufReader;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use log::*;
+use nix::sys::wait::WaitStatus;
 use serde::Deserialize;
 use temp_file::TempFile;
-use nix::sys::wait::WaitStatus;
 
+use crate::chroot_cmd::{CommandWithChroot, TmpFS};
 use crate::config::Config;
 use crate::scoped_path::*;
-use crate::chroot_cmd::{CommandWithChroot, TmpFS};
 
 pub async fn generate(config: Arc<Config>, root: &RootFsPath) -> Result<TempFile> {
     // If the agent is running in a container, the host FS is mounted at
@@ -50,9 +50,7 @@ async fn generate_no_chroot(syft_path: &Path, syft_config: &Path) -> Result<Temp
         .arg("/")
         .spawn()?;
 
-    let out = tokio::task::spawn_blocking(move || {
-        child.wait_with_output()
-    }).await??;
+    let out = tokio::task::spawn_blocking(move || child.wait_with_output()).await??;
 
     if !out.status.success() {
         return Err(anyhow!("syft failed"));
@@ -61,11 +59,13 @@ async fn generate_no_chroot(syft_path: &Path, syft_config: &Path) -> Result<Temp
     Ok(sbom)
 }
 
-async fn generate_with_chroot(syft_path: PathBuf, syft_config: &Path, root: &Path) -> Result<TempFile> {
+async fn generate_with_chroot(
+    syft_path: PathBuf,
+    syft_config: &Path,
+    root: &Path,
+) -> Result<TempFile> {
     let sbom = TempFile::new()?;
-    let sbom_file = std::fs::File::options()
-        .write(true)
-        .open(sbom.path())?;
+    let sbom_file = std::fs::File::options().write(true).open(sbom.path())?;
 
     let tmp = TmpFS::mount(root.join("tmp"))?;
     let syft_config_path = tmp.mountpoint().join("syft.yaml");
@@ -98,7 +98,7 @@ impl Sbom {
         let file = std::fs::File::open(path.as_raw())?;
         let reader = BufReader::new(file);
 
-        Ok(Self{
+        Ok(Self {
             doc: serde_json::from_reader(reader)?,
         })
     }
@@ -149,7 +149,7 @@ impl Artifact {
                 }
 
                 metadata.file_paths(type_, host_root)?
-            },
+            }
             (Some(_), None) => return Err(anyhow!("'metadataType' is missing")),
         };
 
@@ -171,14 +171,16 @@ struct Metadata {
 }
 
 impl Metadata {
-    fn file_paths(&self, pkg_type: PackageType, host_root: &RootFsPath) -> Result<Vec<WorkloadPath>> {
+    fn file_paths(
+        &self,
+        pkg_type: PackageType,
+        host_root: &RootFsPath,
+    ) -> Result<Vec<WorkloadPath>> {
         match self.files {
-            Some(ref files) => {
-                match pkg_type {
-                    PackageType::Rpm | PackageType::Deb => generic_files(files, host_root),
-                    PackageType::Python => python_files(files, self, host_root),
-                }
-            }
+            Some(ref files) => match pkg_type {
+                PackageType::Rpm | PackageType::Deb => generic_files(files, host_root),
+                PackageType::Python => python_files(files, self, host_root),
+            },
             None => Ok(Vec::new()),
         }
     }
@@ -196,7 +198,8 @@ pub enum PackageType {
 }
 
 fn generic_files(files: &[File], host_root: &RootFsPath) -> Result<Vec<WorkloadPath>> {
-    let paths = files.iter()
+    let paths = files
+        .iter()
         .filter_map(extract_path)
         .map(|path| normalize(host_root, &path))
         .collect();
@@ -204,13 +207,19 @@ fn generic_files(files: &[File], host_root: &RootFsPath) -> Result<Vec<WorkloadP
     Ok(paths)
 }
 
-fn python_files(files: &[File], meta: &Metadata, host_root: &RootFsPath) -> Result<Vec<WorkloadPath>> {
-    let site_root: WorkloadPath = meta.site_packages_root_path
+fn python_files(
+    files: &[File],
+    meta: &Metadata,
+    host_root: &RootFsPath,
+) -> Result<Vec<WorkloadPath>> {
+    let site_root: WorkloadPath = meta
+        .site_packages_root_path
         .as_ref()
         .ok_or(anyhow!("'sitePackagesRootPath' is missing"))?
         .into();
 
-    let paths = files.iter()
+    let paths = files
+        .iter()
         .filter_map(extract_path)
         .map(|path| site_root.join(path.as_raw()))
         .map(|path| normalize(host_root, &path))
@@ -229,9 +238,8 @@ fn normalize(host_root: &RootFsPath, path: &WorkloadPath) -> WorkloadPath {
 
     match host_path.realpath() {
         Ok(norm_path) => {
-            WorkloadPath::from_rootfs(host_root, &norm_path)
-                .unwrap_or_else(|_| path.clone())
-        },
+            WorkloadPath::from_rootfs(host_root, &norm_path).unwrap_or_else(|_| path.clone())
+        }
         Err(_) => path.clone(),
     }
 }

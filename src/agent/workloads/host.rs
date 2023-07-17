@@ -1,17 +1,17 @@
 use std::borrow::Cow;
-use std::sync::Arc;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use anyhow::{Result};
+use anyhow::Result;
 use log::*;
-use uuid::Uuid;
 use lru::LruCache;
+use uuid::Uuid;
 
 use crate::config::Config;
-use crate::registry::{Registry, PkgRef};
 use crate::open_monitor::FileOpenMonitorArc;
+use crate::registry::{PkgRef, Registry};
 use crate::sbom::Sbom;
 use crate::scoped_path::*;
 
@@ -37,16 +37,20 @@ pub struct HostWorkload {
 }
 
 impl HostWorkload {
-    pub fn new(sbom: Sbom, config: Arc<Config>, open_mon: FileOpenMonitorArc, labels: HashMap<String, String>) -> Result<Self> {
+    pub fn new(
+        sbom: Sbom,
+        config: Arc<Config>,
+        open_mon: FileOpenMonitorArc,
+        labels: HashMap<String, String>,
+    ) -> Result<Self> {
         let host_root = RootFsPath::from(config.host_root());
         let id = load_baseos_id();
 
         let os_pretty_name = match get_os_release(&host_root) {
-            Ok(mut os_release) => {
-                os_release.remove("PRETTY_NAME")
-                    .or_else(|| os_release.remove("NAME"))
-                    .unwrap_or("Linux".to_string())
-            },
+            Ok(mut os_release) => os_release
+                .remove("PRETTY_NAME")
+                .or_else(|| os_release.remove("NAME"))
+                .unwrap_or("Linux".to_string()),
             Err(err) => {
                 error!("Failed to retrieve os-release: {err}");
                 String::new()
@@ -59,11 +63,14 @@ impl HostWorkload {
                 Ok(path) => {
                     let rootfs_path = path.to_rootfs(&host_root);
                     if let Err(err) = open_mon.add_path(&rootfs_path) {
-                        error!("Failed to start monitoring {} for container: {err}", rootfs_path.display());
+                        error!(
+                            "Failed to start monitoring {} for container: {err}",
+                            rootfs_path.display()
+                        );
                     }
 
                     includes.add(path);
-                },
+                }
                 Err(err) => {
                     // ignore "no such file or directory" errors
                     if !super::is_not_found(&err) {
@@ -73,7 +80,7 @@ impl HostWorkload {
             };
         }
 
-        Ok(Self{
+        Ok(Self {
             id,
             labels,
             hostname: config.hostname(),
@@ -99,7 +106,7 @@ impl HostWorkload {
                         self.in_use_batch.append(&mut pkgs);
                     }
                 }
-            },
+            }
             Ok(None) => (),
             Err(err) => super::resolve_failed(filename, err),
         }
@@ -111,8 +118,7 @@ impl HostWorkload {
 
     // Checks if the path is not filtered out and returns canonicalized verison
     fn resolve(&self, path: &WorkloadPath) -> Result<Option<WorkloadPath>> {
-        let rp = path.to_rootfs(&self.host_root)
-            .realpath()?;
+        let rp = path.to_rootfs(&self.host_root).realpath()?;
 
         if !super::is_file(&rp) {
             return Ok(None);
@@ -155,7 +161,9 @@ fn uuid_string() -> String {
         .to_string()
 }
 
-fn get_os_release(host_root: &RootFsPath) -> rs_release::Result<HashMap<Cow<'static, str>, String>> {
+fn get_os_release(
+    host_root: &RootFsPath,
+) -> rs_release::Result<HashMap<Cow<'static, str>, String>> {
     for file in OS_RELEASE_PATHS {
         let file = host_root.join(&PathBuf::from(file));
         if let Ok(release) = rs_release::parse_os_release(file.as_raw()) {

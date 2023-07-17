@@ -11,8 +11,7 @@ const PROTOS: &[&str] = &[
 fn build_protos() -> Result<(), Box<dyn std::error::Error>> {
     let includes: &[&str] = &[];
 
-    tonic_build::configure()
-        .compile(PROTOS, includes)?;
+    tonic_build::configure().compile(PROTOS, includes)?;
 
     for proto in PROTOS {
         println!("cargo:rerun-if-changed={proto}");

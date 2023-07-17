@@ -1,14 +1,13 @@
-use std::ffi::{OsString, OsStr, CString, CStr};
+use std::ffi::{CStr, CString, OsStr, OsString};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt;
-use std::path::{PathBuf, Path};
-use std::os::fd::{AsRawFd, OwnedFd, FromRawFd, RawFd};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use nix::fcntl::{AtFlags, FdFlag};
 use nix::sys::wait::WaitStatus;
 use nix::unistd::ForkResult;
-use nix::fcntl::{AtFlags, FdFlag};
 use tokio_pipe::{PipeRead, PipeWrite};
-
 
 pub struct CommandWithChroot {
     exe: PathBuf,
@@ -57,16 +56,15 @@ impl CommandWithChroot {
     }
 
     pub async fn run(self) -> Result<WaitStatus> {
-        let mut inp = self.stdin_file.map(PipedInFile::new)
-            .transpose()?;
+        let mut inp = self.stdin_file.map(PipedInFile::new).transpose()?;
 
-        let mut outp = self.stdout_file.map(PipedOutFile::new)
-            .transpose()?;
+        let mut outp = self.stdout_file.map(PipedOutFile::new).transpose()?;
 
-        let mut errp = self.stderr_file.map(PipedOutFile::new)
-            .transpose()?;
+        let mut errp = self.stderr_file.map(PipedOutFile::new).transpose()?;
 
-        let args: Vec<CString> = self.args.into_iter()
+        let args: Vec<CString> = self
+            .args
+            .into_iter()
             .map(|s| CString::new(s.into_vec()).unwrap())
             .collect();
 
@@ -76,7 +74,7 @@ impl CommandWithChroot {
             .collect();
 
         match unsafe { nix::unistd::fork()? } {
-            ForkResult::Parent{ child, .. } => {
+            ForkResult::Parent { child, .. } => {
                 if let Some(ref mut inp) = inp {
                     inp.close();
                 }
@@ -89,9 +87,9 @@ impl CommandWithChroot {
                     errp.close();
                 }
 
-                let status = tokio::task::spawn_blocking(move || {
-                    nix::sys::wait::waitpid(child, None)
-                }).await??;
+                let status =
+                    tokio::task::spawn_blocking(move || nix::sys::wait::waitpid(child, None))
+                        .await??;
 
                 if let Some(inp) = inp {
                     _ = inp.join().await;
@@ -106,8 +104,7 @@ impl CommandWithChroot {
                 }
 
                 Ok(status)
-
-            },
+            }
             ForkResult::Child => {
                 // From here to execve, we have to be very careful not to touch anything
                 // that may malloc. It's a multi-threaded app and forking
@@ -141,10 +138,9 @@ impl CommandWithChroot {
                     die("chroot_exec failed");
                 }
                 panic!("unreachable");
-            },
+            }
         }
     }
-
 }
 
 // Opens the executable, performs a chroot, executes the opened executable
@@ -156,7 +152,13 @@ fn chroot_exec(exe: &Path, chroot: &Path, args: &[CString], env: &[CString]) -> 
     }
 
     nix::unistd::chdir("/")?;
-    nix::unistd::execveat(fd.as_raw_fd(), <&CStr>::default(), args, env, AtFlags::AT_EMPTY_PATH)?;
+    nix::unistd::execveat(
+        fd.as_raw_fd(),
+        <&CStr>::default(),
+        args,
+        env,
+        AtFlags::AT_EMPTY_PATH,
+    )?;
     // never returns
 
     Ok(())
@@ -178,10 +180,7 @@ impl PipedInFile {
             Ok(w)
         });
 
-        Ok(Self {
-            inp: Some(r),
-            task,
-        })
+        Ok(Self { inp: Some(r), task })
     }
 
     fn dup_to(&mut self, newfd: RawFd) -> nix::Result<()> {
@@ -245,8 +244,12 @@ impl PipedOutFile {
 
 fn open_file(path: &Path) -> nix::Result<OwnedFd> {
     // stdlib File::open insists on setting O_CLOEXEC, which we don't want.
-    let fd = nix::fcntl::open(path, nix::fcntl::OFlag::empty(), nix::sys::stat::Mode::empty())?;
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) } )
+    let fd = nix::fcntl::open(
+        path,
+        nix::fcntl::OFlag::empty(),
+        nix::sys::stat::Mode::empty(),
+    )?;
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 fn clear_cloexec(fd: RawFd) -> nix::Result<()> {
