@@ -122,7 +122,7 @@ impl WorkloadPath {
         let rp = self.to_rootfs(prefix)
             .realpath()?;
 
-        Ok(WorkloadPath::from_rootfs(prefix, &rp)?)
+        WorkloadPath::from_rootfs(prefix, &rp)
     }
 }
 

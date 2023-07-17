@@ -1,8 +1,8 @@
 use std::sync::Arc;
-use std::collections::{HashMap};
-use std::path::{PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use anyhow::{Result};
+use anyhow::Result;
 use log::*;
 use lru::LruCache;
 
@@ -12,7 +12,7 @@ use crate::open_monitor::FileOpenMonitorArc;
 use crate::scoped_path::*;
 use crate::containers::ContainerInfo;
 
-use super::{PathSet};
+use super::PathSet;
 
 struct ContainerWorkload {
     root: RootFsPath,
@@ -141,7 +141,7 @@ impl ContainerWorkloads {
                             _ = self.open_monitor.add_path(&path);
                         }
 
-                        self.workloads.insert(id.clone(), workload);
+                        self.workloads.insert(id, workload);
                     },
                     Err(err) => error!("Failed to create a container workload: {err}"),
                 }

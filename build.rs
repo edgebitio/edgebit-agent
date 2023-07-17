@@ -41,7 +41,7 @@ fn build() -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = build() {
-        eprintln!("{}", e.to_string());
+        eprintln!("{e}");
         return Err(e);
     }
     Ok(())

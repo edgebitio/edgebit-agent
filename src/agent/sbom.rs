@@ -67,7 +67,7 @@ async fn generate_with_chroot(syft_path: PathBuf, syft_config: &Path, root: &Pat
         .write(true)
         .open(sbom.path())?;
 
-    let tmp = TmpFS::mount(root.join("tmp").to_path_buf())?;
+    let tmp = TmpFS::mount(root.join("tmp"))?;
     let syft_config_path = tmp.mountpoint().join("syft.yaml");
 
     std::fs::copy(syft_config, &syft_config_path)?;

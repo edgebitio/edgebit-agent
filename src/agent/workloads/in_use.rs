@@ -61,7 +61,7 @@ pub async fn track_pkgs_in_use(containers: Arc<Containers>, workloads: Workloads
 }
 
 fn pop_open_event(q: &mut Mutex<VecDeque<OpenEventQueueItem>>, cutoff: Instant) -> Option<OpenEvent> {
-    let mut q = q.lock().unwrap();
+    let q = q.get_mut().unwrap();
     if q.front()?.timestamp > cutoff {
         None
     } else {

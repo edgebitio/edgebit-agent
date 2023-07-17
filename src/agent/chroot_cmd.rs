@@ -3,7 +3,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{PathBuf, Path};
 use std::os::fd::{AsRawFd, OwnedFd, FromRawFd, RawFd};
 
-use anyhow::{Result};
+use anyhow::Result;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::ForkResult;
 use nix::fcntl::{AtFlags, FdFlag};
@@ -57,13 +57,13 @@ impl CommandWithChroot {
     }
 
     pub async fn run(self) -> Result<WaitStatus> {
-        let mut inp = self.stdin_file.map(|f| PipedInFile::new(f))
+        let mut inp = self.stdin_file.map(PipedInFile::new)
             .transpose()?;
 
-        let mut outp = self.stdout_file.map(|f| PipedOutFile::new(f))
+        let mut outp = self.stdout_file.map(PipedOutFile::new)
             .transpose()?;
 
-        let mut errp = self.stderr_file.map(|f| PipedOutFile::new(f))
+        let mut errp = self.stderr_file.map(PipedOutFile::new)
             .transpose()?;
 
         let args: Vec<CString> = self.args.into_iter()
@@ -117,30 +117,24 @@ impl CommandWithChroot {
                     if inp.dup_to(0).is_err() {
                         die("dup2(0) failed");
                     }
-                } else {
-                    if clear_cloexec(0).is_err() {
-                        die("clearing FD_CLOEXEC for fd=0 failed");
-                    }
+                } else if clear_cloexec(0).is_err() {
+                    die("clearing FD_CLOEXEC for fd=0 failed");
                 }
 
                 if let Some(ref mut outp) = outp {
                     if outp.dup_to(1).is_err() {
                         die("dup2(1) failed");
                     }
-                } else {
-                    if clear_cloexec(1).is_err() {
-                        die("clearing FD_CLOEXEC for fd=1 failed");
-                    }
+                } else if clear_cloexec(1).is_err() {
+                    die("clearing FD_CLOEXEC for fd=1 failed");
                 }
 
                 if let Some(ref mut errp) = errp {
                     if errp.dup_to(2).is_err() {
                         die("dup2(2) failed");
                     }
-                } else {
-                    if clear_cloexec(2).is_err() {
-                        die("clearing FD_CLOEXEC for fd=2 failed");
-                    }
+                } else if clear_cloexec(2).is_err() {
+                    die("clearing FD_CLOEXEC for fd=2 failed");
                 }
 
                 if chroot_exec(&self.exe, &self.chroot, &args, &env).is_err() {
@@ -162,7 +156,7 @@ fn chroot_exec(exe: &Path, chroot: &Path, args: &[CString], env: &[CString]) -> 
     }
 
     nix::unistd::chdir("/")?;
-    nix::unistd::execveat(fd.as_raw_fd(), <&CStr>::default(), &args, &env, AtFlags::AT_EMPTY_PATH)?;
+    nix::unistd::execveat(fd.as_raw_fd(), <&CStr>::default(), args, env, AtFlags::AT_EMPTY_PATH)?;
     // never returns
 
     Ok(())

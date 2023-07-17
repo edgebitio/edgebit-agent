@@ -21,7 +21,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use log::*;
 use clap::Parser;
-use tokio::sync::mpsc::{Receiver};
+use tokio::sync::mpsc::Receiver;
 use prost_types::Timestamp;
 
 use config::Config;
@@ -101,12 +101,12 @@ async fn run(args: &CliArgs) -> Result<()> {
     info!("Connecting to EdgeBit at {url}");
     let mut client = platform::Client::connect(
         url.try_into()?,
-        token.try_into()?,
+        token,
         config.hostname(),
         machine_id,
     ).await?;
 
-    let sbom = load_sbom(&args, config.clone(), &mut client).await?;
+    let sbom = load_sbom(args, config.clone(), &mut client).await?;
 
     client.reset_workloads().await?;
 
@@ -326,7 +326,7 @@ async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: Strin
 
 async fn register_host_workload(client: &mut platform::Client, workload: &HostWorkload, extra_labels: HashMap<String, String>) -> Result<()> {
     info!("Registering BaseOS workload");
-    let req = to_upsert_workload_req(&workload, extra_labels);
+    let req = to_upsert_workload_req(workload, extra_labels);
     client.upsert_workload(req).await?;
     Ok(())
 }

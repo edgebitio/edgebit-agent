@@ -122,7 +122,7 @@ impl BpfProbes {
     }
 
     fn watch_zombies<F>(&self, callback: F) -> JoinHandle<Result<()>>
-    where F: Send + Sync + Fn(&[u8]) -> () + 'static
+    where F: Send + Sync + Fn(&[u8]) + 'static
     {
         let cb = Box::new(move |_cpu, buf: &[u8]| {
            callback(buf)
@@ -153,7 +153,7 @@ impl BpfProbes {
     }
 
     fn watch_opens<F>(&self, callback: F) -> JoinHandle<Result<()>>
-    where F: Send + Sync + Fn(&[u8]) -> () + 'static
+    where F: Send + Sync + Fn(&[u8]) + 'static
     {
         let cb = Box::new(move |_cpu, buf: &[u8]| {
            callback(buf)

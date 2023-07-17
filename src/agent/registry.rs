@@ -6,6 +6,7 @@ use anyhow::Result;
 use crate::sbom::Sbom;
 use crate::scoped_path::*;
 
+#[derive(Default)]
 pub struct Registry {
     // Filename to a list of pkg ids
     inner: HashMap<WorkloadPath, Vec<String>>,

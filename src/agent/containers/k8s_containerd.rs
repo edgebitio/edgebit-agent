@@ -66,7 +66,7 @@ impl K8sContainerdTracker {
         Self{
             containers: ContainersClient::new(ch.clone()),
             tasks: TasksClient::new(ch.clone()),
-            events: EventsClient::new(ch.clone()),
+            events: EventsClient::new(ch),
             container_roots,
         }
     }
@@ -120,7 +120,6 @@ impl K8sContainerdTracker {
                     Ok(None) => (),
                     Err(err) => {
                         error!("Failed to inspect container(id={}): {err}", msg.container_id);
-                        return;
                     }
                 }
             },
@@ -177,7 +176,7 @@ impl K8sContainerdTracker {
                 continue;
             }
 
-            let (id, ci) = self.into_container_info(c).await;
+            let (id, ci) = self.as_container_info(c).await;
             map.insert(id, ci);
         }
 
@@ -200,7 +199,7 @@ impl K8sContainerdTracker {
                 return Ok(None);
             }
 
-            let (_, ci) = self.into_container_info(c).await;
+            let (_, ci) = self.as_container_info(c).await;
 
             Ok(Some(ci))
 
@@ -209,7 +208,7 @@ impl K8sContainerdTracker {
         }
     }
 
-    async fn into_container_info(&mut self, mut c: Container) -> (String, ContainerInfo) {
+    async fn as_container_info(&mut self, mut c: Container) -> (String, ContainerInfo) {
         let image_id = if let Some(meta) = c.extensions.remove(CRI_CONTAINERD_CONTAINER_METADATA) {
             match into_cri_metadata(meta) {
                 Ok(meta) => Some(meta.metadata.image_ref),
@@ -340,7 +339,7 @@ fn is_container(c: &Container) -> bool {
 }
 
 fn into_oci_spec(spec: Any) -> Option<Spec> {
-    if &spec.type_url == OCI_SPEC_TYPE_NAME {
+    if spec.type_url == OCI_SPEC_TYPE_NAME {
         let oci_spec: Spec = serde_json::from_slice(&spec.value).ok()?;
         if oci_spec.version().starts_with("1.") {
             return Some(oci_spec);

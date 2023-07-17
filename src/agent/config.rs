@@ -233,7 +233,7 @@ impl Config {
             .clone()
             .or_else(|| std::env::var("EDGEBIT_HOSTROOT")
                             .ok()
-                            .map(|p| PathBuf::from(p))
+                            .map(PathBuf::from)
                         )
             .unwrap_or(PathBuf::from("/"))
     }

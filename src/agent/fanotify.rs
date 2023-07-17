@@ -1,6 +1,6 @@
 use std::os::fd::{OwnedFd, FromRawFd, AsRawFd};
 use std::io::ErrorKind;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::os::unix::ffi::OsStringExt;
 
 use anyhow::{Result, anyhow};
@@ -20,7 +20,7 @@ impl Event {
         match &self.fd {
             Some(fd) => {
                 let mut proc_path: PathBuf = "/proc/self/fd".into();
-                let fd = fd.as_raw_fd() as i32;
+                let fd = fd.as_raw_fd();
                 proc_path.push(fd.to_string());
 
                 let filepath = std::fs::read_link(&proc_path)
@@ -51,7 +51,7 @@ impl Fanotify {
     pub fn add_open_mark(&self, path: PathBuf) -> Result<()> {
         trace!("fanotify add mark: {}", path.display());
         fanotify::low_level::fanotify_mark(
-            self.fd.as_raw_fd() as i32,
+            self.fd.as_raw_fd(),
             FAN_MARK_ADD|FAN_MARK_FILESYSTEM,
             FAN_OPEN,
             AT_FDCWD,
@@ -63,7 +63,7 @@ impl Fanotify {
 
     pub fn remove_open_mark(&self, path: PathBuf) -> Result<()> {
         fanotify::low_level::fanotify_mark(
-            self.fd.as_raw_fd() as i32,
+            self.fd.as_raw_fd(),
             FAN_MARK_REMOVE|FAN_MARK_FILESYSTEM,
             FAN_OPEN,
             AT_FDCWD,
@@ -78,7 +78,7 @@ impl Fanotify {
             let mut guard = self.fd.readable().await?;
 
             let items_res = guard.try_io(|inner| {
-                fanotify::low_level::fanotify_read(inner.get_ref().as_raw_fd() as i32)
+                fanotify::low_level::fanotify_read(inner.get_ref().as_raw_fd())
             });
 
             match items_res {

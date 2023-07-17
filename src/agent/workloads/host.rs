@@ -88,7 +88,7 @@ impl HostWorkload {
     }
 
     pub fn file_opened(&mut self, filename: &WorkloadPath) {
-        match self.resolve(&filename) {
+        match self.resolve(filename) {
             Ok(Some(filepath)) => {
                 // if already reported, no need to do it again
                 if !self.check_and_mark_reported(filepath.clone()) {

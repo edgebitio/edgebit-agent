@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use std::time::{SystemTime, Duration};
 
 use anyhow::{Result, anyhow};
 use log::*;
-use bollard::{Docker};
+use bollard::Docker;
 use bollard::system::EventsOptions;
 use bollard::models::{EventMessage, EventMessageTypeEnum, ContainerStateStatusEnum};
 use bollard::container::ListContainersOptions;
@@ -139,7 +139,6 @@ impl Tracker {
                                 },
                                 Err(err) => {
                                     error!("Failed to inspect container(id={id}): {err}");
-                                    return;
                                 }
                             }
                         },
@@ -195,7 +194,7 @@ impl Tracker {
             Some(mut driver) => {
                 if driver.name == GRAPH_DRIVER_OVERLAYFS {
                     driver.data.remove("MergedDir")
-                        .map(|path| HostPath::from(path))
+                        .map(HostPath::from)
                 } else {
                     None
                 }
@@ -207,8 +206,7 @@ impl Tracker {
             Some(id) => {
                 self.docker.inspect_image(id).await?
                     .repo_tags
-                    .map(|tags| head(&tags))
-                    .flatten()
+                    .and_then(|tags| head(&tags))
             },
             None => None,
         };
@@ -218,15 +216,13 @@ impl Tracker {
                 // Convert from ISO 8601 string to SystemTime
 
                 let started_at = state.started_at
-                    .map(|t| t.parse::<DateTime<Utc>>().ok())
-                    .flatten()
+                    .and_then(|t| t.parse::<DateTime<Utc>>().ok())
                     .map(|t| t.into());
 
                 let finished_at = match state.status {
                     Some(ContainerStateStatusEnum::RUNNING) | Some(ContainerStateStatusEnum::PAUSED) => None,
                     _ => {
-                        state.finished_at .map(|t| t.parse::<DateTime<Utc>>().ok())
-                            .flatten()
+                        state.finished_at.and_then(|t| t.parse::<DateTime<Utc>>().ok())
                             .filter(|t| t > &DT_UNIX_EPOCH)
                             .map(|t| t.into())
                     }

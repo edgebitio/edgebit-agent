@@ -61,10 +61,6 @@ impl PathSet {
             .keys()
             .any(|f| path.as_raw().starts_with(f.as_raw()))
     }
-
-    fn all<'a>(&'a self) -> impl Iterator<Item=&WorkloadPath> + 'a {
-        self.members.keys()
-    }
 }
 
 pub(crate) fn resolve_failed(filepath: &WorkloadPath, err: anyhow::Error) {

@@ -2,9 +2,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Result};
+use anyhow::Result;
 use log::*;
-use podman_api::{Podman};
+use podman_api::Podman;
 use podman_api::opts::{EventsOpts, ContainerListOpts};
 use podman_api::models::Event;
 use futures::stream::StreamExt;
@@ -117,7 +117,6 @@ impl Tracker {
                         },
                         Err(err) => {
                             error!("Failed to inspect container(id={id}): {err}");
-                            return;
                         }
                     }
                 },
@@ -168,7 +167,7 @@ impl Tracker {
                     match driver.data {
                         Some(mut data) => {
                             data.remove("MergedDir")
-                                .map(|path| HostPath::from(path))
+                                .map(HostPath::from)
                         },
                         None => {
                             error!("Container id={id}: graph driver data missing");
