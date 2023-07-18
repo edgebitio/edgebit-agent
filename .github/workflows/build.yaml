@@ -7,14 +7,33 @@ on:
 
 jobs:
   build-binaries:
+    permissions:
+      id-token: write  # for AWS OIDC
+
     strategy:
       matrix:
-        runs-on: [buildjet-4vcpu-ubuntu-2204, buildjet-4vcpu-ubuntu-2204-arm]
+        include:
+          - runner: buildjet-4vcpu-ubuntu-2204
+            arch: amd64
+          - runner: buildjet-4vcpu-ubuntu-2204-arm
+            arch: arm64
 
-    runs-on: ${{matrix.runs-on}}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v3
+
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::970625735569:role/GitHubActionsECRPush
+
+      - name: Configure AWS Docker Auth
+        uses: aws-actions/amazon-ecr-login@v1
+        with:
+          registry-type: public
+
 
       - name: Building builder image
         uses: docker/build-push-action@v3
@@ -23,7 +42,56 @@ jobs:
           push: false
           tags: agent-builder:latest
 
+      - name: Generate Image Metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            public.ecr.aws/edgebit/edgebit-agent
+          tags: |
+            type=ref,event=pr,suffix=-${{ matrix.arch }}
+          flavor: |
+            latest=false
+
       - name: Building agent
         uses: docker/build-push-action@v3
         with:
-          push: false
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+  docker-combine:
+    needs: build-binaries
+
+    permissions:
+      id-token: write  # for AWS OIDC
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::970625735569:role/GitHubActionsECRPush
+
+      - name: Configure AWS Docker Auth
+        uses: aws-actions/amazon-ecr-login@v1
+        with:
+          registry-type: public
+
+      - name: Generate Image Metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            public.ecr.aws/edgebit/edgebit-agent
+          tags: |
+            type=ref,event=pr
+
+      - name: Combine into multi-arch
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ steps.meta.outputs.tags }} \
+            ${{ steps.meta.outputs.tags }}-amd64 \
+            ${{ steps.meta.outputs.tags }}-arm64
