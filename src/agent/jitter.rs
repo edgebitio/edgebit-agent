@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use rand::rngs::ThreadRng;
 use rand::distributions::{Distribution, Uniform};
+use rand::rngs::ThreadRng;
 
 pub struct JitteredDuration {
     rng: ThreadRng,
@@ -12,7 +12,7 @@ impl JitteredDuration {
     pub fn new(magnitude: Duration) -> Self {
         let mag = magnitude.as_secs() as i64;
 
-        Self{
+        Self {
             rng: rand::thread_rng(),
             dist: Uniform::from(-mag..mag),
         }
@@ -42,7 +42,7 @@ mod tests {
         // make sure not all are right at 60
         let mut non_center = 0;
         let center = Duration::from_secs(60);
-        
+
         for _ in 0..1000 {
             let s = jitter.add(center);
             assert!(s >= Duration::from_secs(50));

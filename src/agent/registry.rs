@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use log::*;
 use anyhow::Result;
+use log::*;
 
 use crate::sbom::Sbom;
 use crate::scoped_path::*;
 
+#[derive(Default)]
 pub struct Registry {
     // Filename to a list of pkg ids
     inner: HashMap<WorkloadPath, Vec<String>>,
@@ -13,7 +14,9 @@ pub struct Registry {
 
 impl Registry {
     pub fn new() -> Self {
-        Self { inner: HashMap::new() }
+        Self {
+            inner: HashMap::new(),
+        }
     }
 
     pub fn from_sbom(sbom: &Sbom, rootfs: &RootFsPath) -> Result<Self> {
@@ -23,18 +26,16 @@ impl Registry {
             match pkg.files(rootfs) {
                 Ok(files) => {
                     for file in files {
-                        inner.entry(file)
-                            .or_default()
-                            .push(pkg.id.to_string());
+                        inner.entry(file).or_default().push(pkg.id.to_string());
                     }
-                },
+                }
                 Err(e) => {
                     debug!("'{}': {e}", pkg.id);
                 }
             }
         }
 
-        Ok(Self{ inner })
+        Ok(Self { inner })
     }
 
     pub fn get_packages(&self, filenames: Vec<WorkloadPath>) -> Vec<PkgRef> {

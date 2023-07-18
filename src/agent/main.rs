@@ -1,40 +1,40 @@
+pub mod chroot_cmd;
+pub mod cloud_metadata;
 pub mod config;
-pub mod open_monitor;
-pub mod platform;
-pub mod sbom;
-pub mod registry;
 pub mod containers;
 pub mod fanotify;
-pub mod workloads;
-pub mod version;
-pub mod scoped_path;
-pub mod chroot_cmd;
-pub mod label;
-pub mod cloud_metadata;
 pub mod jitter;
+pub mod label;
+pub mod open_monitor;
+pub mod platform;
+pub mod registry;
+pub mod sbom;
+pub mod scoped_path;
+pub mod version;
+pub mod workloads;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, Instant, Duration};
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Result, anyhow};
-use log::*;
+use anyhow::{anyhow, Result};
 use clap::Parser;
-use tokio::sync::mpsc::{Receiver};
+use log::*;
 use prost_types::Timestamp;
+use tokio::sync::mpsc::Receiver;
 
 use config::Config;
-use sbom::Sbom;
-use platform::pb;
-use containers::{Containers, ContainerInfo};
-use workloads::{Workloads, Event};
-use workloads::host::HostWorkload;
-use version::VERSION;
-use scoped_path::*;
+use containers::{ContainerInfo, Containers};
 use jitter::JitteredDuration;
+use platform::pb;
+use sbom::Sbom;
+use scoped_path::*;
+use version::VERSION;
+use workloads::host::HostWorkload;
+use workloads::{Event, Workloads};
 
-use crate::open_monitor::{FileOpenMonitorArc, OpenMonitor, NullOpenMonitor, OpenEvent};
+use crate::open_monitor::{FileOpenMonitorArc, NullOpenMonitor, OpenEvent, OpenMonitor};
 use crate::workloads::track_container_lifecycle;
 
 use crate::cloud_metadata::CloudMetadata;
@@ -72,7 +72,7 @@ async fn main() {
     let args = CliArgs::parse();
 
     match run(&args).await {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(err) => eprintln!("{err}"),
     }
 }
@@ -99,14 +99,10 @@ async fn run(args: &CliArgs) -> Result<()> {
     let machine_id = read_machine_id(&host_root.join(MACHINE_ID_PATH));
 
     info!("Connecting to EdgeBit at {url}");
-    let mut client = platform::Client::connect(
-        url.try_into()?,
-        token.try_into()?,
-        config.hostname(),
-        machine_id,
-    ).await?;
+    let mut client =
+        platform::Client::connect(url.try_into()?, token, config.hostname(), machine_id).await?;
 
-    let sbom = load_sbom(&args, config.clone(), &mut client).await?;
+    let sbom = load_sbom(args, config.clone(), &mut client).await?;
 
     client.reset_workloads().await?;
 
@@ -136,7 +132,7 @@ async fn run(args: &CliArgs) -> Result<()> {
         sbom,
         config.clone(),
         open_mon.clone(),
-        cloud_meta.host_labels()
+        cloud_meta.host_labels(),
     )?;
 
     register_host_workload(&mut client, &host_wrkld, config.labels()).await?;
@@ -144,14 +140,18 @@ async fn run(args: &CliArgs) -> Result<()> {
     let containers = Arc::new(containers);
     let workloads = Workloads::new(config.clone(), host_wrkld, open_mon.clone());
 
-    tokio::task::spawn(
-        track_container_lifecycle(cont_rx, workloads.containers.clone(), events_tx.clone())
-    );
+    tokio::task::spawn(track_container_lifecycle(
+        cont_rx,
+        workloads.containers.clone(),
+        events_tx.clone(),
+    ));
 
     if let Some(rx) = open_rx {
-        tokio::task::spawn(
-            workloads::in_use::track_pkgs_in_use(containers.clone(), workloads.clone(), rx)
-        );
+        tokio::task::spawn(workloads::in_use::track_pkgs_in_use(
+            containers.clone(),
+            workloads.clone(),
+            rx,
+        ));
     }
 
     info!("Monitoring workloads");
@@ -160,7 +160,12 @@ async fn run(args: &CliArgs) -> Result<()> {
     Ok(())
 }
 
-async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platform::Client, mut events: Receiver<Event>) {
+async fn monitor(
+    config: Arc<Config>,
+    workloads: Workloads,
+    client: &mut platform::Client,
+    mut events: Receiver<Event>,
+) {
     let mut periods = tokio::time::interval(Duration::from_millis(1000));
     let labels = config.labels();
 
@@ -168,7 +173,7 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
     let mut jitter = JitteredDuration::new(HEARTBEAT_JITTER);
 
     loop {
-        tokio::select!{
+        tokio::select! {
             evt = events.recv() => {
                 match evt {
                     Some(Event::ContainerStarted(id, info)) => handle_container_started(client, id, info, labels.clone()).await,
@@ -219,15 +224,18 @@ async fn monitor(config: Arc<Config>, workloads: Workloads, client: &mut platfor
     }
 }
 
-fn to_upsert_workload_req(workload: &HostWorkload, mut extra_labels: HashMap<String, String>) -> pb::UpsertWorkloadRequest {
+fn to_upsert_workload_req(
+    workload: &HostWorkload,
+    mut extra_labels: HashMap<String, String>,
+) -> pb::UpsertWorkloadRequest {
     let mut labels = workload.labels.clone();
     labels.extend(extra_labels.drain());
 
     pb::UpsertWorkloadRequest {
         workload_id: workload.id.clone(),
-        workload: Some(pb::Workload{
+        workload: Some(pb::Workload {
             labels,
-            kind: Some(pb::workload::Kind::Host(pb::Host{
+            kind: Some(pb::workload::Kind::Host(pb::Host {
                 hostname: workload.hostname.clone(),
                 instance: String::new(),
                 os_pretty_name: workload.os_pretty_name.clone(),
@@ -236,38 +244,45 @@ fn to_upsert_workload_req(workload: &HostWorkload, mut extra_labels: HashMap<Str
         start_time: Some(SystemTime::now().into()),
         end_time: Some(TIMESTAMP_INFINITY),
         image_id: workload.image_id.clone(),
-        image: Some(pb::Image{
-            kind: Some(pb::image::Kind::Generic(pb::GenericImage{})),
+        image: Some(pb::Image {
+            kind: Some(pb::image::Kind::Generic(pb::GenericImage {})),
         }),
         machine_id: String::new(),
     }
 }
 
-async fn handle_container_started(client: &mut platform::Client, id: String, info: ContainerInfo, mut extra_labels: HashMap<String, String>) {
+async fn handle_container_started(
+    client: &mut platform::Client,
+    id: String,
+    info: ContainerInfo,
+    mut extra_labels: HashMap<String, String>,
+) {
     info!("Registering container started: {id}");
     debug!("Container info: {info:?}");
 
     let mut labels = info.labels.clone();
     labels.extend(extra_labels.drain());
 
-    let res = client.upsert_workload(pb::UpsertWorkloadRequest{
+    let res = client
+        .upsert_workload(pb::UpsertWorkloadRequest {
             workload_id: id,
-            workload: Some(pb::Workload{
+            workload: Some(pb::Workload {
                 labels,
-                kind: Some(pb::workload::Kind::Container(pb::Container{
+                kind: Some(pb::workload::Kind::Container(pb::Container {
                     name: info.name.unwrap_or(String::new()),
                 })),
             }),
             start_time: info.start_time.map(|t| t.into()),
             end_time: Some(TIMESTAMP_INFINITY),
             image_id: info.image_id.unwrap_or(String::new()),
-            image: Some(pb::Image{
-                kind: Some(pb::image::Kind::Docker(pb::DockerImage{
+            image: Some(pb::Image {
+                kind: Some(pb::image::Kind::Docker(pb::DockerImage {
                     tag: info.image.unwrap_or(String::new()),
                 })),
             }),
             machine_id: String::new(),
-    }).await;
+        })
+        .await;
 
     if let Err(err) = res {
         error!("Failed to register container started: {err}");
@@ -277,18 +292,24 @@ async fn handle_container_started(client: &mut platform::Client, id: String, inf
 async fn handle_container_stopped(client: &mut platform::Client, id: String, info: ContainerInfo) {
     info!("Registering container stopped: {id}");
 
-    let res = client.upsert_workload(pb::UpsertWorkloadRequest{
-        workload_id: id,
-        end_time: info.end_time.map(|t| t.into()),
-        ..Default::default()
-    }).await;
+    let res = client
+        .upsert_workload(pb::UpsertWorkloadRequest {
+            workload_id: id,
+            end_time: info.end_time.map(|t| t.into()),
+            ..Default::default()
+        })
+        .await;
 
     if let Err(err) = res {
         error!("Failed to register container stopped: {err}");
     }
 }
 
-async fn load_sbom(args: &CliArgs, config: Arc<Config>, client: &mut platform::Client) -> Result<Sbom> {
+async fn load_sbom(
+    args: &CliArgs,
+    config: Arc<Config>,
+    client: &mut platform::Client,
+) -> Result<Sbom> {
     let sbom = match &args.sbom {
         Some(sbom_path) => {
             info!("Loading SBOM");
@@ -299,7 +320,7 @@ async fn load_sbom(args: &CliArgs, config: Arc<Config>, client: &mut platform::C
             }
 
             sbom
-        },
+        }
         None => {
             info!("Generating SBOM");
             let host_root = RootFsPath::from(config.host_root());
@@ -311,7 +332,7 @@ async fn load_sbom(args: &CliArgs, config: Arc<Config>, client: &mut platform::C
             }
 
             sbom
-        },
+        }
     };
 
     Ok(sbom)
@@ -324,9 +345,13 @@ async fn upload_sbom(client: &mut platform::Client, path: &Path, image_id: Strin
     Ok(())
 }
 
-async fn register_host_workload(client: &mut platform::Client, workload: &HostWorkload, extra_labels: HashMap<String, String>) -> Result<()> {
+async fn register_host_workload(
+    client: &mut platform::Client,
+    workload: &HostWorkload,
+    extra_labels: HashMap<String, String>,
+) -> Result<()> {
     info!("Registering BaseOS workload");
-    let req = to_upsert_workload_req(&workload, extra_labels);
+    let req = to_upsert_workload_req(workload, extra_labels);
     client.upsert_workload(req).await?;
     Ok(())
 }
@@ -341,7 +366,7 @@ fn read_machine_id(path: &RootFsPath) -> String {
                 warn!("MachineID ({}) is not 32 chars long", path.display());
                 String::new()
             }
-        },
+        }
         Err(err) => {
             warn!("Failed to read MachineID from {}: {err}", path.display());
             String::new()

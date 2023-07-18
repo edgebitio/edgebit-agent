@@ -1,13 +1,13 @@
-use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
-use std::time::{Instant, Duration};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use log::*;
 use tokio::sync::mpsc::Receiver;
 
+use super::Workloads;
 use crate::containers::Containers;
 use crate::open_monitor::OpenEvent;
-use super::Workloads;
 
 const OPEN_EVENT_LAG: Duration = Duration::from_millis(500);
 
@@ -16,13 +16,17 @@ struct OpenEventQueueItem {
     evt: OpenEvent,
 }
 
-pub async fn track_pkgs_in_use(containers: Arc<Containers>, workloads: Workloads, mut rx: Receiver<OpenEvent>) {
+pub async fn track_pkgs_in_use(
+    containers: Arc<Containers>,
+    workloads: Workloads,
+    mut rx: Receiver<OpenEvent>,
+) {
     let mut open_event_q = Mutex::new(VecDeque::<OpenEventQueueItem>::new());
 
     let mut periods = tokio::time::interval(Duration::from_millis(100));
 
     loop {
-        tokio::select!{
+        tokio::select! {
             _ = periods.tick() => {
                 let cutoff = Instant::now()
                     .checked_sub(OPEN_EVENT_LAG)
@@ -60,12 +64,14 @@ pub async fn track_pkgs_in_use(containers: Arc<Containers>, workloads: Workloads
     }
 }
 
-fn pop_open_event(q: &mut Mutex<VecDeque<OpenEventQueueItem>>, cutoff: Instant) -> Option<OpenEvent> {
-    let mut q = q.lock().unwrap();
+fn pop_open_event(
+    q: &mut Mutex<VecDeque<OpenEventQueueItem>>,
+    cutoff: Instant,
+) -> Option<OpenEvent> {
+    let q = q.get_mut().unwrap();
     if q.front()?.timestamp > cutoff {
         None
     } else {
-        q.pop_front()
-            .map(|item| item.evt)
+        q.pop_front().map(|item| item.evt)
     }
 }

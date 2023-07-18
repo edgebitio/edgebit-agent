@@ -1,27 +1,28 @@
 use std::collections::HashMap;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use std::time::{SystemTime, Duration};
+use std::time::{Duration, SystemTime};
 
-use anyhow::{Result, anyhow};
-use log::*;
-use bollard::{Docker};
-use bollard::system::EventsOptions;
-use bollard::models::{EventMessage, EventMessageTypeEnum, ContainerStateStatusEnum};
+use anyhow::{anyhow, Result};
 use bollard::container::ListContainersOptions;
+use bollard::models::{ContainerStateStatusEnum, EventMessage, EventMessageTypeEnum};
+use bollard::system::EventsOptions;
+use bollard::Docker;
+use chrono::{offset::FixedOffset, offset::Utc, DateTime};
 use futures::stream::StreamExt;
 use lazy_static::lazy_static;
-use chrono::{DateTime, offset::Utc, offset::FixedOffset};
+use log::*;
 
 use super::{ContainerEventsPtr, ContainerInfo};
-use crate::scoped_path::*;
 use crate::cloud_metadata::CloudMetadata;
+use crate::scoped_path::*;
 
 const GRAPH_DRIVER_OVERLAYFS: &str = "overlay2";
 const DOCKER_CONNECT_TIMEOUT: u64 = 5;
 
 lazy_static! {
-    static ref DT_UNIX_EPOCH: DateTime<FixedOffset> = DateTime::parse_from_rfc3339("1970-01-01T00:00:00-00:00").unwrap();
+    static ref DT_UNIX_EPOCH: DateTime<FixedOffset> =
+        DateTime::parse_from_rfc3339("1970-01-01T00:00:00-00:00").unwrap();
 }
 
 pub struct DockerTracker {
@@ -38,7 +39,7 @@ impl DockerTracker {
                 Ok(_) => {
                     info!("Connected to Docker daemon");
                     break;
-                },
+                }
                 Err(err) => {
                     if quiet {
                         debug!("Failed to connect to Docker daemon: {err}");
@@ -52,9 +53,7 @@ impl DockerTracker {
             }
         }
 
-        Ok(Self{
-            docker,
-        })
+        Ok(Self { docker })
     }
 
     pub async fn is_podman(&self) -> Result<bool> {
@@ -71,7 +70,7 @@ impl DockerTracker {
     }
 
     pub async fn track(self, cloud_meta: CloudMetadata, events: ContainerEventsPtr) -> Result<()> {
-        let tracker = Arc::new(Tracker{
+        let tracker = Arc::new(Tracker {
             docker: self.docker,
             cloud_meta,
             events,
@@ -104,9 +103,7 @@ impl Tracker {
         let opts = EventsOptions {
             since: None,
             until: None,
-            filters: [
-                ("event", vec!["start", "die"]),
-            ].into(),
+            filters: [("event", vec!["start", "die"])].into(),
         };
 
         let mut stream = self.docker.events(Some(opts));
@@ -136,20 +133,18 @@ impl Tracker {
                             match self.inspect_container(&id).await {
                                 Ok(info) => {
                                     self.events.container_started(id, info).await;
-                                },
+                                }
                                 Err(err) => {
                                     error!("Failed to inspect container(id={id}): {err}");
-                                    return;
                                 }
                             }
-                        },
+                        }
                         "die" => {
-                            let end_time = msg.time
-                                .map(systime_from_secs)
-                                .unwrap_or(SystemTime::now());
+                            let end_time =
+                                msg.time.map(systime_from_secs).unwrap_or(SystemTime::now());
 
                             self.events.container_stopped(id, end_time).await;
-                        },
+                        }
                         _ => (),
                     }
                 }
@@ -158,10 +153,8 @@ impl Tracker {
     }
 
     async fn load_running(&self) -> Result<()> {
-        let opts = ListContainersOptions::<&str>{
-            filters: HashMap::from([
-                ("status", vec!["running"])
-            ]),
+        let opts = ListContainersOptions::<&str> {
+            filters: HashMap::from([("status", vec!["running"])]),
             ..Default::default()
         };
 
@@ -177,7 +170,7 @@ impl Tracker {
                 Ok(info) => {
                     debug!("Container started: {id}; {info:?}");
                     self.events.container_started(id, info).await;
-                },
+                }
                 Err(err) => {
                     error!("Docker inspect_container({id}): {err}");
                     continue;
@@ -194,22 +187,21 @@ impl Tracker {
         let rootfs = match cont_resp.graph_driver {
             Some(mut driver) => {
                 if driver.name == GRAPH_DRIVER_OVERLAYFS {
-                    driver.data.remove("MergedDir")
-                        .map(|path| HostPath::from(path))
+                    driver.data.remove("MergedDir").map(HostPath::from)
                 } else {
                     None
                 }
-            },
+            }
             None => None,
         };
 
         let image_tag = match &cont_resp.image {
-            Some(id) => {
-                self.docker.inspect_image(id).await?
-                    .repo_tags
-                    .map(|tags| head(&tags))
-                    .flatten()
-            },
+            Some(id) => self
+                .docker
+                .inspect_image(id)
+                .await?
+                .repo_tags
+                .and_then(|tags| head(&tags)),
             None => None,
         };
 
@@ -217,33 +209,34 @@ impl Tracker {
             Some(state) => {
                 // Convert from ISO 8601 string to SystemTime
 
-                let started_at = state.started_at
-                    .map(|t| t.parse::<DateTime<Utc>>().ok())
-                    .flatten()
+                let started_at = state
+                    .started_at
+                    .and_then(|t| t.parse::<DateTime<Utc>>().ok())
                     .map(|t| t.into());
 
                 let finished_at = match state.status {
-                    Some(ContainerStateStatusEnum::RUNNING) | Some(ContainerStateStatusEnum::PAUSED) => None,
-                    _ => {
-                        state.finished_at .map(|t| t.parse::<DateTime<Utc>>().ok())
-                            .flatten()
-                            .filter(|t| t > &DT_UNIX_EPOCH)
-                            .map(|t| t.into())
-                    }
+                    Some(ContainerStateStatusEnum::RUNNING)
+                    | Some(ContainerStateStatusEnum::PAUSED) => None,
+                    _ => state
+                        .finished_at
+                        .and_then(|t| t.parse::<DateTime<Utc>>().ok())
+                        .filter(|t| t > &DT_UNIX_EPOCH)
+                        .map(|t| t.into()),
                 };
 
                 (started_at, finished_at)
-            },
-            None => (None, None)
+            }
+            None => (None, None),
         };
 
-        let mounts = cont_resp.mounts
+        let mounts = cont_resp
+            .mounts
             .unwrap_or_default()
             .into_iter()
             .filter_map(|m| m.destination.map(|d| d.into()))
             .collect();
 
-        Ok(ContainerInfo{
+        Ok(ContainerInfo {
             name: cont_resp.name,
             image_id: cont_resp.image,
             image: image_tag,
@@ -254,7 +247,6 @@ impl Tracker {
             labels: self.cloud_meta.container_labels(id),
         })
     }
-
 }
 
 fn systime_from_secs(secs: i64) -> SystemTime {
@@ -264,9 +256,17 @@ fn systime_from_secs(secs: i64) -> SystemTime {
 
 fn docker_connection(host: &str) -> Result<Docker> {
     if host.starts_with("tcp://") || host.starts_with("http://") {
-        Ok(Docker::connect_with_http(host, DOCKER_CONNECT_TIMEOUT, bollard::API_DEFAULT_VERSION)?)
+        Ok(Docker::connect_with_http(
+            host,
+            DOCKER_CONNECT_TIMEOUT,
+            bollard::API_DEFAULT_VERSION,
+        )?)
     } else if host.starts_with("unix://") {
-        Ok(Docker::connect_with_unix(host, DOCKER_CONNECT_TIMEOUT, bollard::API_DEFAULT_VERSION)?)
+        Ok(Docker::connect_with_unix(
+            host,
+            DOCKER_CONNECT_TIMEOUT,
+            bollard::API_DEFAULT_VERSION,
+        )?)
     } else {
         Err(anyhow!("Unsupported Docker host scheme: {host}"))
     }

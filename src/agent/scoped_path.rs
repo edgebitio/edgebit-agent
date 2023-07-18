@@ -1,6 +1,6 @@
-use std::path::{PathBuf, Path, Display};
-use std::ffi::{CStr, OsStr};
 use anyhow::Result;
+use std::ffi::{CStr, OsStr};
+use std::path::{Display, Path, PathBuf};
 
 // Relative to the host rootfs
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -28,7 +28,7 @@ impl HostPath {
     }
 }
 
-impl <T: Into<PathBuf>> From<T> for HostPath {
+impl<T: Into<PathBuf>> From<T> for HostPath {
     fn from(p: T) -> Self {
         Self(p.into())
     }
@@ -65,7 +65,7 @@ impl RootFsPath {
     }
 }
 
-impl <T: Into<PathBuf>> From<T> for RootFsPath {
+impl<T: Into<PathBuf>> From<T> for RootFsPath {
     fn from(p: T) -> Self {
         Self(p.into())
     }
@@ -81,20 +81,15 @@ impl WorkloadPath {
     }
 
     pub fn from_rootfs(prefix: &RootFsPath, path: &RootFsPath) -> Result<Self> {
-        let stripped = path.as_raw()
-            .strip_prefix(prefix.as_raw())?;
+        let stripped = path.as_raw().strip_prefix(prefix.as_raw())?;
 
-        Ok(PathBuf::from("/")
-            .join(stripped)
-            .into())
+        Ok(PathBuf::from("/").join(stripped).into())
     }
 
     pub fn from_cstr(cstr: &CStr) -> Self {
         use std::os::unix::ffi::OsStrExt;
 
-        OsStr::from_bytes(cstr.to_bytes())
-            .to_os_string()
-            .into()
+        OsStr::from_bytes(cstr.to_bytes()).to_os_string().into()
     }
 
     pub fn as_raw(&self) -> &Path {
@@ -114,19 +109,17 @@ impl WorkloadPath {
     }
 
     pub fn join(&self, path: &Path) -> WorkloadPath {
-        self.0.join(path)
-            .into()
+        self.0.join(path).into()
     }
 
     pub fn realpath(&self, prefix: &RootFsPath) -> Result<Self> {
-        let rp = self.to_rootfs(prefix)
-            .realpath()?;
+        let rp = self.to_rootfs(prefix).realpath()?;
 
-        Ok(WorkloadPath::from_rootfs(prefix, &rp)?)
+        WorkloadPath::from_rootfs(prefix, &rp)
     }
 }
 
-impl <T: Into<PathBuf>> From<T> for WorkloadPath {
+impl<T: Into<PathBuf>> From<T> for WorkloadPath {
     fn from(p: T) -> Self {
         Self(p.into())
     }

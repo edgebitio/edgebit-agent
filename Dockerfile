@@ -4,6 +4,11 @@ RUN touch /tmp/dummy
 
 COPY . /root/src
 
+RUN cargo fmt --check
+
+# Treat warnings as errors to make it fail on suggestions
+RUN cargo clippy -- -Dwarnings
+
 RUN cargo build --release --target "$(cat /etc/arch)-unknown-linux-musl" && \
     ln -s "$(cat /etc/arch)-unknown-linux-musl/release/edgebit-agent" "target/edgebit-agent"
 

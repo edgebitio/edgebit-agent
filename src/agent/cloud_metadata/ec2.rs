@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use aws_config::imds::client::Client;
 use anyhow::Result;
-use serde::Deserialize;
+use aws_config::imds::client::Client;
 use log::*;
+use serde::Deserialize;
 
 use crate::label::*;
 
@@ -13,7 +13,6 @@ struct InstanceIdentityDocument {
     account_id: Option<String>,
 
     //architecture: String,
-
     #[serde(rename = "availabilityZone")]
     availability_zone: Option<String>,
 
@@ -28,7 +27,6 @@ struct InstanceIdentityDocument {
 
     //#[serde(rename = "privateIp")]
     //privateIp: Option<String>,
-
     region: Option<String>,
 }
 
@@ -38,11 +36,11 @@ impl InstanceIdentityDocument {
     }
 
     async fn from_imds() -> Result<Self> {
-        let client = Client::builder()
-            .build()
-            .await?;
+        let client = Client::builder().build().await?;
 
-        let doc = client.get("/2022-09-24/dynamic/instance-identity/document").await?;
+        let doc = client
+            .get("/2022-09-24/dynamic/instance-identity/document")
+            .await?;
 
         info!("Loaded identity document: {doc}");
 
@@ -58,17 +56,14 @@ impl Ec2Metadata {
     pub async fn load() -> Result<Self> {
         let doc = InstanceIdentityDocument::from_imds().await?;
 
-        Ok(Ec2Metadata{
-            doc,
-        })
+        Ok(Ec2Metadata { doc })
     }
 }
 
 impl super::MetadataProvider for Ec2Metadata {
     fn host_labels(&self) -> HashMap<String, String> {
-        let mut labels: HashMap<String, String> = [
-            (LABEL_CLOUD_PROVIDER.to_string(), "ec2".to_string()),
-        ].into();
+        let mut labels: HashMap<String, String> =
+            [(LABEL_CLOUD_PROVIDER.to_string(), "ec2".to_string())].into();
 
         if let Some(ref id) = self.doc.instance_id {
             labels.insert(LABEL_INSTANCE_ID.to_string(), id.clone());
@@ -105,11 +100,11 @@ impl super::MetadataProvider for Ec2Metadata {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{SocketAddr};
+    use std::net::SocketAddr;
 
     use assert2::assert;
-    use hyper::{Server, Request, Response, Body, StatusCode};
     use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server, StatusCode};
 
     use super::*;
 
@@ -132,15 +127,17 @@ mod tests {
   "version" : "2017-09-30"
 }"#;
 
-    async fn mock_metadata_svc(req: Request<Body>) -> std::result::Result<Response<Body>, hyper::Error> {
+    async fn mock_metadata_svc(
+        req: Request<Body>,
+    ) -> std::result::Result<Response<Body>, hyper::Error> {
         let resp = match req.uri() {
-            uri if uri == "/latest/api/token" => {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("x-aws-ec2-metadata-token-ttl-seconds", "21600")
-                    .body(Body::from("AQAAAID1mYTPepz28ILQ88CZW6r62fL9ur4jSIKniBoIm2YkofZ9Dw=="))
-                    .unwrap()
-            },
+            uri if uri == "/latest/api/token" => Response::builder()
+                .status(StatusCode::OK)
+                .header("x-aws-ec2-metadata-token-ttl-seconds", "21600")
+                .body(Body::from(
+                    "AQAAAID1mYTPepz28ILQ88CZW6r62fL9ur4jSIKniBoIm2YkofZ9Dw==",
+                ))
+                .unwrap(),
             _ => {
                 assert!(req.uri() == "/2022-09-24/dynamic/instance-identity/document");
 
@@ -160,9 +157,8 @@ mod tests {
 
         let addr = SocketAddr::V4("127.0.0.1:9991".parse().unwrap());
 
-        let make_svc = make_service_fn(|_| async {
-            Ok::<_, hyper::Error>(service_fn(mock_metadata_svc))
-        });
+        let make_svc =
+            make_service_fn(|_| async { Ok::<_, hyper::Error>(service_fn(mock_metadata_svc)) });
         let server = Server::bind(&addr).serve(make_svc);
         let server_task = tokio::task::spawn(server);
 
