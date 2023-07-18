@@ -24,7 +24,7 @@ use pb::inventory_service_client::InventoryServiceClient;
 use crate::registry::PkgRef;
 use crate::version::VERSION;
 
-const EXPIRATION_SLACK: Duration = Duration::from_secs(60);
+const EXPIRATION_SLACK: Duration = Duration::from_secs(10*60);
 const DEFAULT_EXPIRATION: Duration = Duration::from_secs(60*60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -228,18 +228,16 @@ async fn refresh_loop(
     let mut token_svc = TokenServiceClient::with_interceptor(channel, auth_token.clone());
 
     loop {
-        let mut interval = expiration
-            .duration_since(SystemTime::now())
-            .unwrap_or_else(|_| {
-                error!("Session expiration is in the past");
-                DEFAULT_EXPIRATION
-            });
+        let mut deadline = expiration - EXPIRATION_SLACK;
+        if deadline < SystemTime::now() {
+            // shouldn't happen in prod but can happen with mocks
+            deadline = expiration;
+        }
 
-        interval = interval.checked_sub(EXPIRATION_SLACK).unwrap_or(interval);
+        let dt: chrono::DateTime<chrono::Utc> = deadline.into();
+        info!("Next session renewal at {}", dt.to_rfc2822());
 
-        info!("Next session renewal in {interval:?}");
-
-        tokio::time::sleep(interval).await;
+        sleep_until(deadline).await;
 
         let req = pb::GetSessionTokenRequest {
             refresh_token: refresh_token.clone(),
@@ -300,5 +298,14 @@ fn data_stream<'a, R: Read + Send + 'a>(mut rd: R, result: Arc<Mutex<Result<()>>
                 }
             }
         }
+    }
+}
+
+async fn sleep_until(deadline: SystemTime) {
+    // Avoid sleeping for more than a minute.
+    // On virtualized machines, time is not always accurately kept
+    while let Ok(remaining) = deadline.duration_since(SystemTime::now()) {
+        let dur = std::cmp::min(remaining, Duration::from_secs(60));
+        tokio::time::sleep(dur).await;
     }
 }
