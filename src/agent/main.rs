@@ -96,7 +96,7 @@ async fn run(args: &CliArgs) -> Result<()> {
     let url = config.edgebit_url();
     let token = config.edgebit_id();
     let host_root = RootFsPath::from(config.host_root());
-    let machine_id = read_machine_id(&host_root.join(MACHINE_ID_PATH));
+    let machine_id = read_machine_id(&host_root.join(MACHINE_ID_PATH))?;
 
     info!("Connecting to EdgeBit at {url}");
     let mut client =
@@ -356,20 +356,27 @@ async fn register_host_workload(
     Ok(())
 }
 
-fn read_machine_id(path: &RootFsPath) -> String {
+fn read_machine_id(path: &RootFsPath) -> Result<String> {
     match std::fs::read_to_string(path.as_raw()) {
         Ok(id) => {
             let id = id.trim();
-            if id.len() == 32 {
-                id.to_string()
+            if id.len() != 32 {
+                Err(anyhow!(
+                    "MachineID ({}) is not 32 chars long",
+                    path.display()
+                ))
+            } else if id == "00000000000000000000000000000000" {
+                Err(anyhow!(
+                    "MachineID ({}) is not valid -- all zeros",
+                    path.display()
+                ))
             } else {
-                warn!("MachineID ({}) is not 32 chars long", path.display());
-                String::new()
+                Ok(id.to_string())
             }
         }
-        Err(err) => {
-            warn!("Failed to read MachineID from {}: {err}", path.display());
-            String::new()
-        }
+        Err(err) => Err(anyhow!(
+            "failed to read MachineID from {}: {err}",
+            path.display()
+        )),
     }
 }
