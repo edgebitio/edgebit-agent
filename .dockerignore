@@ -1,4 +1,6 @@
-target
+target/
+builder-target/
 dist/output
 dist/syft
 *.json
+sboms/
