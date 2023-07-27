@@ -21,7 +21,7 @@ spec:
       hostPID: true
       containers:
         - name: agent
-          image: "public.ecr.aws/edgebit/edgebit-agent:0.4.1"
+          image: "public.ecr.aws/edgebit/edgebit-agent:0.4.2"
           imagePullPolicy: IfNotPresent
           command:
           resources: {}
