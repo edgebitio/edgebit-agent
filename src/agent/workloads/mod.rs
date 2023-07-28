@@ -69,11 +69,11 @@ pub(crate) fn resolve_failed(filepath: &WorkloadPath, err: anyhow::Error) {
             // File not found is ok as it was a transient file that got deleted
             // This almost exclusively occurs on data files
             if io_err.kind() != std::io::ErrorKind::NotFound {
-                info!("Failed to canonicalize {}: {io_err}", filepath.display());
+                debug!("Failed to canonicalize {}: {io_err}", filepath.display());
             }
         }
         Err(err) => {
-            info!("Failed to canonicalize {}: {err}", filepath.display());
+            debug!("Failed to canonicalize {}: {err}", filepath.display());
         }
     }
 }
