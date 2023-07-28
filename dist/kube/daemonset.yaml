@@ -50,6 +50,7 @@ spec:
             - name: host
               mountPath: /host
               readOnly: true
+              mountPropagation: HostToContainer
             - name: debugfs
               mountPath: /sys/kernel/debug
             - name: var-edgebit

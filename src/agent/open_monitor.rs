@@ -168,7 +168,7 @@ impl BpfProbes {
         let skel = self.skel.clone();
 
         tokio::task::spawn_blocking(move || {
-            let zombies = {
+            let opens = {
                 let skel = skel.lock().unwrap();
                 let maps = skel.maps();
 
@@ -178,13 +178,13 @@ impl BpfProbes {
                     .lost_cb(handle_lost_events)
                     .build()
                 {
-                    Ok(zombies) => zombies,
+                    Ok(opens) => opens,
                     Err(err) => return Err(anyhow::Error::from(err)),
                 }
             };
 
             loop {
-                _ = zombies.poll(Duration::from_millis(100));
+                _ = opens.poll(Duration::from_millis(100));
             }
         })
     }
@@ -330,6 +330,8 @@ async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<Open
                 }
             };
 
+            trace!("fanotify: {} / {:?}", filename.display(), cgroup_name);
+
             let open = OpenEvent {
                 cgroup_name,
                 filename,
@@ -357,6 +359,8 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
                 None
             }
         };
+
+        trace!("bpf: {} / {:?}", filename.display(), cgroup_name);
 
         let open = OpenEvent {
             cgroup_name,

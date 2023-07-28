@@ -79,8 +79,8 @@ impl ContainerWorkload {
     fn file_opened(&mut self, path: &WorkloadPath) {
         match self.resolve(path) {
             Ok(Some(filepath)) => {
+                // if already reported, no need to do it again
                 if !self.check_and_mark_reported(filepath.clone()) {
-                    // already reported, no need to do it again
                     let pkg = PkgRef {
                         id: String::new(),
                         filenames: vec![filepath],
