@@ -1,0 +1,34 @@
+output: syft
+
+check-for-app-update: false
+
+catalogers:
+  - alpmdb
+  - apkdb
+  - binary
+  - cocoapods
+  - conan
+  - dartlang-lock
+  - dpkgdb
+  - dotnet-deps
+  - elixir-mix-lock
+  - erlang-rebar-lock
+  - go-mod-file
+  - go-module-binary
+  - graalvm-native-image
+  - haskell
+  - java
+  - java-gradle-lockfile
+  - java-pom
+  - javascript-lock
+  - javascript-package
+  - nix-store
+  - php-composer-lock
+  - portage
+  - python-index
+  - python-package
+  - ruby-gemfile
+  - rpm-db
+  - rust-cargo-lock
+  - sbom
+  - swift-package-manager
