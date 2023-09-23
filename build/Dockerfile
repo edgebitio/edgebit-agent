@@ -65,7 +65,7 @@ RUN ln -s "/usr/bin/g++" "/usr/bin/musl-g++" && \
 
 RUN echo "Building zlib" && \
     cd /tmp && \
-    curl -sSfLO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
+    curl -sSfLO "https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
     ./configure --static --prefix=/usr/local/musl && \
     make && make install && \
