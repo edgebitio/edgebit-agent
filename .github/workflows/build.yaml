@@ -42,11 +42,10 @@ jobs:
 
 
       - name: Building builder image
-        id: build
+        id: build-buildier
         uses: docker/build-push-action@v3
         with:
           context: build/
-          load: true
           push: false
           tags: agent-builder:latest
 
@@ -62,6 +61,7 @@ jobs:
             latest=false
 
       - name: Building agent
+        id: build-agent
         uses: docker/build-push-action@v3
         with:
           push: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
@@ -71,7 +71,7 @@ jobs:
         if: ${{ matrix.arch == 'amd64' }}
         uses: eyakubovich/sbom-action@ey/add-config-input
         with:
-          image: ${{ steps.build.outputs.digest }}
+          image: ${{ steps.build-agent.outputs.digest }}
           artifact-name: sbom.spdx.json
           upload-artifact: true
           config: .github/edgebit/build-syft.yaml
@@ -81,7 +81,7 @@ jobs:
         run: |
           cat > /tmp/metadata.json <<EOF
             {
-              "image-id": "${{ steps.build.outputs.imageid }}",
+              "image-id": "${{ steps.build-agent.outputs.imageid }}",
               "pr-number": "${{ github.event.number }}",
               "tags": "${{ github.ref == 'refs/heads/main' && 'latest' || '' }}"
             }
