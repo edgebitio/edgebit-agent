@@ -43,7 +43,7 @@ jobs:
         uses: edgebitio/edgebit-build@v1
         with:
           edgebit-url: https://edgebit.edgebit.io
-          token: ${{ secrets.EDGEBIT_ACCESS_TOKEN }}
+          token: ${{ secrets.EDGEBIT_TOKEN }}
           component: edgebitio-edgebit-agent
           sbom-file: ./sbom.syft.json
           args-file: ./metadata.json
