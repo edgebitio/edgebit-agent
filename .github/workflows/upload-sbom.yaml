@@ -40,7 +40,7 @@ jobs:
       - run: unzip artifacts.zip
 
       - name: Upload SBOM to EdgeBit
-        uses: edgebitio/edgebit-build@v1
+        uses: edgebitio/edgebit-build@main
         with:
           edgebit-url: https://edgebit.edgebit.io
           token: ${{ secrets.EDGEBIT_TOKEN }}
