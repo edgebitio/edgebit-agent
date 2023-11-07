@@ -269,15 +269,15 @@ async fn handle_container_started(
             workload: Some(pb::Workload {
                 labels,
                 kind: Some(pb::workload::Kind::Container(pb::Container {
-                    name: info.name.unwrap_or(String::new()),
+                    name: info.name.unwrap_or_default(),
                 })),
             }),
             start_time: info.start_time.map(|t| t.into()),
             end_time: Some(TIMESTAMP_INFINITY),
-            image_id: info.image_id.unwrap_or(String::new()),
+            image_id: info.image_id.unwrap_or_default(),
             image: Some(pb::Image {
                 kind: Some(pb::image::Kind::Docker(pb::DockerImage {
-                    tag: info.image.unwrap_or(String::new()),
+                    tag: info.image.unwrap_or_default(),
                 })),
             }),
             machine_id: String::new(),
