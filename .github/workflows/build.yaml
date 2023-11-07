@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 jobs:
   build-binaries:
@@ -63,12 +66,14 @@ jobs:
           push: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
 
-      - name: Download Syft
-        id: syft
-        uses: anchore/sbom-action/download-syft@v0.14.2
-      
       - name: Generate SBOM from the container
-        run: "${{ steps.syft.outputs.cmd }} --config .github/edgebit/build-syft.yaml --file /tmp/sbom.syft.json ${{ steps.build-DG2dZx.outputs.digest }}"
+        if: ${{ matrix.arch == 'amd64' }}
+        uses: eyakubovich/sbom-action@ey/add-config-input
+        with:
+          image: ${{ steps.build-DG2dZx.outputs.digest }}
+          artifact-name: edgebit-sbom
+          upload-artifact: true
+          config: .github/edgebit/build-syft.yaml
       
   docker-combine:
     needs: build-binaries
