@@ -243,7 +243,7 @@ impl Config {
     }
 
     pub fn labels(&self) -> HashMap<String, String> {
-        let mut labels = self.inner.labels.clone().unwrap_or(HashMap::new());
+        let mut labels = self.inner.labels.clone().unwrap_or_default();
 
         if let Ok(labels_str) = std::env::var("EDGEBIT_LABELS") {
             labels.extend(labels_str.split(';').filter_map(|kv| {
