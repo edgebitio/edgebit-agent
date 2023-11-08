@@ -41,7 +41,7 @@ jobs:
 
 
       - name: Building builder image
-        id: build-DG2dZx
+        id: build
         uses: docker/build-push-action@v3
         with:
           context: build/
@@ -70,10 +70,26 @@ jobs:
         if: ${{ matrix.arch == 'amd64' }}
         uses: eyakubovich/sbom-action@ey/add-config-input
         with:
-          image: ${{ steps.build-DG2dZx.outputs.digest }}
-          artifact-name: edgebit-sbom
+          image: ${{ steps.build.outputs.digest }}
+          artifact-name: edgebit-agent.spdx.json
           upload-artifact: true
           config: .github/edgebit/build-syft.yaml
+
+      - name: Save metadata to an artifact
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          cat > /tmp/metadata.json <<EOF
+            {
+              "image-id": "${{ steps.build.outputs.imageid }}",
+              "pr-number": "${{ github.event.number }}"
+            }
+          EOF
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ matrix.arch == 'amd64' }}
+        with:
+          name: metadata.json
+          path: /tmp/metadata.json
       
   docker-combine:
     needs: build-binaries
