@@ -99,3 +99,4 @@ kubectl apply -f config.yaml
 ```
 kubectl apply -f daemonset.yaml
 ```
+
