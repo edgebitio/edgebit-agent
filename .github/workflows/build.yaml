@@ -72,7 +72,7 @@ jobs:
         uses: eyakubovich/sbom-action@ey/add-config-input
         with:
           image: ${{ steps.build.outputs.digest }}
-          artifact-name: edgebit-agent.spdx.json
+          artifact-name: sbom.spdx.json
           upload-artifact: true
           config: .github/edgebit/build-syft.yaml
 
@@ -82,7 +82,8 @@ jobs:
           cat > /tmp/metadata.json <<EOF
             {
               "image-id": "${{ steps.build.outputs.imageid }}",
-              "pr-number": "${{ github.event.number }}"
+              "pr-number": "${{ github.event.number }}",
+              "tags": "${{ github.ref == 'refs/heads/main' && 'latest' || '' }}"
             }
           EOF
 
