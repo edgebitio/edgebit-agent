@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 jobs:
   build-binaries:
@@ -34,11 +37,12 @@ jobs:
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         uses: aws-actions/amazon-ecr-login@v1
         with:
+          mask-password: true
           registry-type: public
 
 
       - name: Building builder image
-        id: build-DG2dZx
+        id: build
         uses: docker/build-push-action@v3
         with:
           context: build/
@@ -63,12 +67,30 @@ jobs:
           push: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
 
-      - name: Download Syft
-        id: syft
-        uses: anchore/sbom-action/download-syft@v0.14.2
-      
       - name: Generate SBOM from the container
-        run: "${{ steps.syft.outputs.cmd }} --config .github/edgebit/build-syft.yaml --file /tmp/sbom.syft.json ${{ steps.build-DG2dZx.outputs.digest }}"
+        if: ${{ matrix.arch == 'amd64' }}
+        uses: eyakubovich/sbom-action@ey/add-config-input
+        with:
+          image: ${{ steps.build.outputs.digest }}
+          artifact-name: edgebit-agent.spdx.json
+          upload-artifact: true
+          config: .github/edgebit/build-syft.yaml
+
+      - name: Save metadata to an artifact
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          cat > /tmp/metadata.json <<EOF
+            {
+              "image-id": "${{ steps.build.outputs.imageid }}",
+              "pr-number": "${{ github.event.number }}"
+            }
+          EOF
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ matrix.arch == 'amd64' }}
+        with:
+          name: metadata.json
+          path: /tmp/metadata.json
       
   docker-combine:
     needs: build-binaries
@@ -91,6 +113,7 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v1
         with:
           registry-type: public
+          mask-password: true
 
       - name: Generate Image Metadata
         id: meta
