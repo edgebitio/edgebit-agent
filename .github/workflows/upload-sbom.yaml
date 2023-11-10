@@ -11,9 +11,7 @@ on:
 jobs:
   upload:
     runs-on: ubuntu-latest
-    if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Download metadata
@@ -28,7 +26,7 @@ jobs:
         uses: actions/download-artifact@v4-beta
         with:
           run-id: ${{ github.event.workflow_run.id }}
-          name: edgebit-agent.spdx.json
+          name: sbom.spdx.json
 
       - name: Upload SBOM to EdgeBit
         uses: edgebitio/edgebit-build@v1
@@ -36,5 +34,5 @@ jobs:
           edgebit-url: https://edgebit.edgebit.io
           token: ${{ secrets.EDGEBIT_TOKEN }}
           component: edgebitio-edgebit-agent
-          sbom-file: ${{ steps.sbom.outputs.download-path }}
-          args-file: ${{ steps.metadata.outputs.download-path }}
+          sbom-file: ${{ steps.sbom.outputs.download-path }}/sbom.spdx.json
+          args-file: ${{ steps.metadata.outputs.download-path }}/metadata.json
