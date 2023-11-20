@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapFlags, PerfBufferBuilder};
+
 use log::*;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
