@@ -35,6 +35,9 @@ COPY --from=build /tmp/dummy /tmp/
 COPY --from=build /tmp/dummy /run/
 COPY --from=build /tmp/dummy /var/lib/edgebit/
 
+# Copy the .lock for the SBOM
+COPY --from=build /root/src/Cargo.lock /opt/edgebit/Cargo.lock
+
 ENV EDGEBIT_SYFT_PATH=/opt/edgebit/syft/syft
 ENV EDGEBIT_SYFT_CONFIG=/opt/edgebit/syft.yaml
 
