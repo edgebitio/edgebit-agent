@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "edgebit-agent"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "assert2",
