@@ -82,6 +82,7 @@ jobs:
           cat > /tmp/metadata.json <<EOF
             {
               "image-id": "${{ steps.build-agent.outputs.imageid }}",
+              "image-tag": "${{ steps.meta.outputs.images }}:${{ steps.build-agent.outputs.digest }}"
               "pr-number": "${{ github.event.number }}",
               "tags": "${{ github.ref == 'refs/heads/main' && 'latest' || '' }}"
             }
