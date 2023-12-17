@@ -11,7 +11,7 @@ on:
 jobs:
   build-binaries:
     permissions:
-      id-token: write  # for AWS OIDC
+      id-token: write # for AWS OIDC
 
     strategy:
       matrix:
@@ -39,7 +39,6 @@ jobs:
         with:
           mask-password: true
           registry-type: public
-
 
       - name: Building builder image
         id: build-buildier
@@ -71,7 +70,7 @@ jobs:
         if: ${{ matrix.arch == 'amd64' }}
         uses: eyakubovich/sbom-action@ey/add-config-input
         with:
-          image: ${{ steps.build-agent.outputs.digest }}
+          image: ${{ steps.build-agent.outputs.imageid }}
           artifact-name: sbom.spdx.json
           upload-artifact: true
           config: .github/edgebit/build-syft.yaml
@@ -82,7 +81,7 @@ jobs:
           cat > /tmp/metadata.json <<EOF
             {
               "image-id": "${{ steps.build-agent.outputs.imageid }}",
-              "image-tag": "${{ steps.meta.outputs.images }}:${{ steps.build-agent.outputs.digest }}"
+              "image-tag": "${{ steps.meta.outputs.tags }}",
               "pr-number": "${{ github.event.number }}",
               "tags": "${{ github.ref == 'refs/heads/main' && 'latest' || '' }}"
             }
@@ -93,14 +92,14 @@ jobs:
         with:
           name: metadata.json
           path: /tmp/metadata.json
-      
+
   docker-combine:
     needs: build-binaries
 
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
     permissions:
-      id-token: write  # for AWS OIDC
+      id-token: write # for AWS OIDC
 
     runs-on: ubuntu-latest
 
