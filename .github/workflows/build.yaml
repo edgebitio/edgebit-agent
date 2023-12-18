@@ -68,7 +68,7 @@ jobs:
 
       - name: Generate SBOM from the container
         if: ${{ matrix.arch == 'amd64' }}
-        uses: eyakubovich/sbom-action@ey/add-config-input
+        uses: anchore/sbom-action@v0
         with:
           image: ${{ steps.build-agent.outputs.imageid }}
           artifact-name: sbom.spdx.json
