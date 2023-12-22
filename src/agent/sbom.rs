@@ -43,6 +43,7 @@ async fn generate_no_chroot(syft_path: &Path, syft_config: &Path) -> Result<Temp
     let out_path = sbom.path();
 
     let child = Command::new(syft_path)
+        .arg("-q")
         .arg("--file")
         .arg(out_path)
         .arg("--config")
@@ -77,6 +78,7 @@ async fn generate_with_chroot(
         .stdin(std::fs::File::open(syft_config)?)
         .stdout(sbom_file)
         .arg("syft".into())
+        .arg("-q".into())
         .arg("--config".into())
         .arg("/tmp/syft.yaml".into())
         .arg("/".into());
