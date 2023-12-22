@@ -82,6 +82,7 @@ jobs:
           tags: edgebit-agent-build
 
       - name: Building and pushing agent container
+        id: build-agent
         uses: docker/build-push-action@v3
         with:
           push: true
@@ -99,6 +100,27 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: |
             dist/output/edgebit-agent*
+
+      - name: Generate SBOM from the container
+        id: sbom
+        if: ${{ matrix.arch == 'amd64' }}
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.build.outputs.imageid }}
+          output-file: /tmp/sbom.spdx.json
+          config: .github/edgebit/build-syft.yaml
+
+      - name: Upload SBOM to EdgeBit
+        if: ${{ matrix.arch == 'amd64' }}
+        uses: edgebitio/edgebit-build@main
+        with:
+          edgebit-url: https://edgebit.edgebit.io
+          token: ${{ secrets.EDGEBIT_TOKEN }}
+          sbom-file: /tmp/sbom.spdx.json
+          image-id: ${{ steps.build.outputs.imageid }}
+          image-tag: ${{ steps.meta.outputs.tags }}
+          component: edgebitio-edgebit-agent
+          tags: v${{ steps.meta.outputs.version }}
 
   docker-combine:
     needs: draft-release
