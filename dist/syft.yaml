@@ -37,4 +37,5 @@ exclude:
   - ./var/lib/docker
   - ./var/lib/containerd
   - ./var/lib/containers
+  - ./var/lib/host-containerd # EKS
   - ./home/kubernetes/containerized_mounter # GKE
