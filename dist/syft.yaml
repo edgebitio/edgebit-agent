@@ -27,16 +27,16 @@ catalogers:
   - sbom
 
 exclude:
-  - ./dev
-  - ./proc
-  - ./sys
-  - ./tmp
-  - ./run
-  - ./snap
-  - ./var/run
-  - ./var/lib
+  - ./dev/**
+  - ./proc/**
+  - ./sys/**
+  - ./tmp/**
+  - ./run/**
+  - ./snap/**
+  - ./var/run/**
+  - ./var/lib/**
   - ./var/lib/docker
   - ./var/lib/containerd
   - ./var/lib/containers
   - ./var/lib/host-containerd # EKS
-  - ./home/kubernetes/containerized_mounter # GKE
+  - ./home/kubernetes/containerized_mounter/** # GKE
