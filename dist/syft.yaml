@@ -34,6 +34,7 @@ exclude:
   - ./run
   - ./snap
   - ./var/run
+  - ./var/lib
   - ./var/lib/docker
   - ./var/lib/containerd
   - ./var/lib/containers
