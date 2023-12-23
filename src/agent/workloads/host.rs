@@ -12,7 +12,6 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::open_monitor::FileOpenMonitorArc;
 use crate::registry::{PkgRef, Registry};
-use crate::sbom::Sbom;
 use crate::scoped_path::*;
 
 use super::PathSet;
@@ -38,7 +37,7 @@ pub struct HostWorkload {
 
 impl HostWorkload {
     pub fn new(
-        sbom: Sbom,
+        image_id: String,
         config: Arc<Config>,
         open_mon: FileOpenMonitorArc,
         labels: HashMap<String, String>,
@@ -85,8 +84,8 @@ impl HostWorkload {
             labels,
             hostname: config.hostname(),
             os_pretty_name,
-            image_id: sbom.id(),
-            pkgs: Registry::from_sbom(&sbom, &host_root)?,
+            image_id,
+            pkgs: Registry::new(),
             host_root,
             includes,
             reported: LruCache::new(REPORTED_LRU_SIZE),

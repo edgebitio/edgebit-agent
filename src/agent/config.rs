@@ -46,6 +46,8 @@ struct Inner {
 
     pkg_tracking: Option<bool>,
 
+    machine_sbom: Option<bool>,
+
     hostname: Option<String>,
 
     host_root: Option<PathBuf>,
@@ -240,6 +242,17 @@ impl Config {
                     .map(|v| is_yes(&v))
             })
             .unwrap_or(true)
+    }
+
+    pub fn machine_sbom(&self) -> bool {
+        self.inner
+            .machine_sbom
+            .or_else(|| {
+                std::env::var("EDGEBIT_MACHINE_SBOM")
+                    .ok()
+                    .map(|v| is_yes(&v))
+            })
+            .unwrap_or(false)
     }
 
     pub fn labels(&self) -> HashMap<String, String> {
