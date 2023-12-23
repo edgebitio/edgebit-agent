@@ -27,6 +27,7 @@ catalogers:
   - sbom
 
 exclude:
+  - ./**
   - ./dev/**
   - ./proc/**
   - ./sys/**
