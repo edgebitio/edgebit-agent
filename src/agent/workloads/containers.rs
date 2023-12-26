@@ -9,7 +9,6 @@ use lru::LruCache;
 use crate::config::Config;
 use crate::containers::ContainerInfo;
 use crate::open_monitor::FileOpenMonitorArc;
-use crate::registry::PkgRef;
 use crate::scoped_path::*;
 
 use super::PathSet;
@@ -18,7 +17,7 @@ struct ContainerWorkload {
     root: RootFsPath,
     excludes: PathSet,
     reported: LruCache<WorkloadPath, ()>,
-    in_use_batch: Vec<PkgRef>,
+    in_use_batch: Vec<WorkloadPath>,
 }
 
 impl ContainerWorkload {
@@ -81,23 +80,18 @@ impl ContainerWorkload {
             Ok(Some(filepath)) => {
                 // if already reported, no need to do it again
                 if !self.check_and_mark_reported(filepath.clone()) {
-                    let pkg = PkgRef {
-                        id: String::new(),
-                        filenames: vec![filepath],
-                    };
-
-                    self.in_use_batch.push(pkg);
+                    self.in_use_batch.push(filepath);
                 }
             }
             Ok(None) => (),
             Err(err) => {
-                debug!("{}: {err}", path.display());
+                info!("{}: {err}", path.display());
                 super::resolve_failed(path, err);
             }
         }
     }
 
-    fn flush_in_use(&mut self) -> Vec<PkgRef> {
+    fn flush_in_use(&mut self) -> Vec<WorkloadPath> {
         self.in_use_batch.split_off(0)
     }
 }
@@ -159,7 +153,7 @@ impl ContainerWorkloads {
         }
     }
 
-    pub fn flush_in_use(&mut self) -> Vec<(String, Vec<PkgRef>)> {
+    pub fn flush_in_use(&mut self) -> Vec<(String, Vec<WorkloadPath>)> {
         let mut in_use = Vec::new();
 
         for (id, w) in self.workloads.iter_mut() {

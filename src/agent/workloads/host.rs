@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::open_monitor::FileOpenMonitorArc;
-use crate::registry::{PkgRef, Registry};
 use crate::scoped_path::*;
 
 use super::PathSet;
@@ -28,11 +27,10 @@ pub struct HostWorkload {
     pub hostname: String,
     pub os_pretty_name: String,
     pub image_id: String,
-    pkgs: Registry,
     host_root: RootFsPath,
     includes: PathSet,
     reported: LruCache<WorkloadPath, ()>,
-    in_use_batch: Vec<PkgRef>,
+    in_use_batch: Vec<WorkloadPath>,
 }
 
 impl HostWorkload {
@@ -85,7 +83,6 @@ impl HostWorkload {
             hostname: config.hostname(),
             os_pretty_name,
             image_id,
-            pkgs: Registry::new(),
             host_root,
             includes,
             reported: LruCache::new(REPORTED_LRU_SIZE),
@@ -98,12 +95,7 @@ impl HostWorkload {
             Ok(Some(filepath)) => {
                 // if already reported, no need to do it again
                 if !self.check_and_mark_reported(filepath.clone()) {
-                    let filenames = vec![filepath];
-                    let mut pkgs = self.pkgs.get_packages(filenames);
-
-                    if !pkgs.is_empty() {
-                        self.in_use_batch.append(&mut pkgs);
-                    }
+                    self.in_use_batch.push(filepath.clone());
                 }
             }
             Ok(None) => (),
@@ -111,7 +103,7 @@ impl HostWorkload {
         }
     }
 
-    pub fn flush_in_use(&mut self) -> (String, Vec<PkgRef>) {
+    pub fn flush_in_use(&mut self) -> (String, Vec<WorkloadPath>) {
         (self.id.clone(), self.in_use_batch.split_off(0))
     }
 

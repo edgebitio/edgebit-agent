@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::{MapFlags, PerfBufferBuilder};
+use libbpf_rs::{MapFlags, RingBufferBuilder};
 
 use log::*;
 use tokio::sync::mpsc::Sender;
@@ -16,9 +16,6 @@ use crate::scoped_path::*;
 mod probes {
     include!(concat!(env!("OUT_DIR"), "/probes.skel.rs"));
 }
-
-const OPEN_EVENTS_BUF_SIZE: usize = 256;
-const ZOMBIE_EVENTS_BUF_SIZE: usize = 4;
 
 pub trait FileOpenMonitor {
     // NB: Adds the mountpoint of path, not the actual path.
@@ -133,23 +130,18 @@ impl BpfProbes {
 
     fn watch_zombies<F>(&self, callback: F) -> JoinHandle<Result<()>>
     where
-        F: Send + Sync + Fn(&[u8]) + 'static,
+        F: Send + Sync + FnMut(&[u8]) -> i32 + 'static,
     {
-        let cb = Box::new(move |_cpu, buf: &[u8]| callback(buf));
-
         let skel = self.skel.clone();
 
         tokio::task::spawn_blocking(move || {
             let zombies = {
                 let skel = skel.lock().unwrap();
                 let maps = skel.maps();
+                let mut builder = RingBufferBuilder::new();
+                builder.add(maps.zombie_events(), callback)?;
 
-                match PerfBufferBuilder::new(maps.zombie_events())
-                    .pages(ZOMBIE_EVENTS_BUF_SIZE)
-                    .sample_cb(cb)
-                    .lost_cb(handle_lost_events)
-                    .build()
-                {
+                match builder.build() {
                     Ok(zombies) => zombies,
                     Err(err) => return Err(anyhow::Error::from(err)),
                 }
@@ -163,23 +155,18 @@ impl BpfProbes {
 
     fn watch_opens<F>(&self, callback: F) -> JoinHandle<Result<()>>
     where
-        F: Send + Sync + Fn(&[u8]) + 'static,
+        F: Send + Sync + FnMut(&[u8]) -> i32 + 'static,
     {
-        let cb = Box::new(move |_cpu, buf: &[u8]| callback(buf));
-
         let skel = self.skel.clone();
 
         tokio::task::spawn_blocking(move || {
             let opens = {
                 let skel = skel.lock().unwrap();
                 let maps = skel.maps();
+                let mut builder = RingBufferBuilder::new();
+                builder.add(maps.open_events(), callback)?;
 
-                match PerfBufferBuilder::new(maps.open_events())
-                    .pages(OPEN_EVENTS_BUF_SIZE)
-                    .sample_cb(cb)
-                    .lost_cb(handle_lost_events)
-                    .build()
-                {
+                match builder.build() {
                     Ok(opens) => opens,
                     Err(err) => return Err(anyhow::Error::from(err)),
                 }
@@ -190,10 +177,6 @@ impl BpfProbes {
             }
         })
     }
-}
-
-fn handle_lost_events(cpu: i32, count: u64) {
-    warn!("Lost {count} events on CPU {cpu}");
 }
 
 #[repr(C)]
@@ -269,6 +252,8 @@ impl OpenMonitor {
                         error!("Failed to remove process info from BPF map: {err}");
                     }
                 });
+
+                0i32
             })
         };
 
@@ -372,6 +357,8 @@ fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHand
         if let Err(err) = ch.blocking_send(open) {
             error!("Error sending OpenEvent on a channel: {err}");
         }
+
+        0i32
     })
 }
 

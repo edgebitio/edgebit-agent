@@ -7,7 +7,6 @@ pub mod jitter;
 pub mod label;
 pub mod open_monitor;
 pub mod platform;
-pub mod registry;
 pub mod sbom;
 pub mod scoped_path;
 pub mod version;

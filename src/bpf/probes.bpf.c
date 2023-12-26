@@ -100,10 +100,10 @@ BPF_HASH(open_inflight, pid_t, struct open_inflight_entry, 1024);
 BPF_HASH(pid_to_info, pid_t, struct process_info, 1024);
 
 // Open file events
-BPF_PERF_EVENT_ARRAY(open_events);
+BPF_RING_BUF(open_events, 256*1024);
 
 // Process exit events
-BPF_PERF_EVENT_ARRAY(zombie_events);
+BPF_RING_BUF(zombie_events, 4*1024);
 
 static inline bool is_abs(const char *filename) {
     return filename && *filename == '/';
@@ -180,7 +180,7 @@ static void emit_open_event(void *ctx, pid_t tgid, const char *filename, bool us
     if (!is_abs(evt.filename))
         return;
 
-    if (bpf_perf_event_output(ctx, &open_events, BPF_F_CURRENT_CPU, &evt, sizeof(evt)) < 0) {
+    if (bpf_ringbuf_output(&open_events, &evt, sizeof(evt), 0) < 0) {
         BPF_PRINTK("error sending evt_open");
     }
 }
@@ -338,7 +338,7 @@ int sched_process_exit(struct trace_event_raw_sched_process_template *tp) {
 
     // Notify the userspace that a process exited so it has a chance to clean up
     // the pid_to_info map.
-    if (bpf_perf_event_output(tp, &zombie_events, BPF_F_CURRENT_CPU, &pid, sizeof(pid)) < 0) {
+    if (bpf_ringbuf_output(&zombie_events, &pid, sizeof(pid), 0) < 0) {
         BPF_PRINTK("error sending zombie event");
     }
 
