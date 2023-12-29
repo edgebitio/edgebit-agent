@@ -127,7 +127,11 @@ impl Client {
         Ok(())
     }
 
-    pub async fn report_in_use(&mut self, workload_id: String, files: Vec<WorkloadPath>) -> Result<()> {
+    pub async fn report_in_use(
+        &mut self,
+        workload_id: String,
+        files: Vec<WorkloadPath>,
+    ) -> Result<()> {
         let in_use = files
             .into_iter()
             .map(|f| pb::PkgInUse {
