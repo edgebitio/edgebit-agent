@@ -21,7 +21,7 @@ pub mod pb {
 use pb::inventory_service_client::InventoryServiceClient;
 use pb::token_service_client::TokenServiceClient;
 
-use crate::registry::PkgRef;
+use crate::scoped_path::WorkloadPath;
 use crate::version::VERSION;
 
 const EXPIRATION_SLACK: Duration = Duration::from_secs(10 * 60);
@@ -127,16 +127,16 @@ impl Client {
         Ok(())
     }
 
-    pub async fn report_in_use(&mut self, workload_id: String, pkgs: Vec<PkgRef>) -> Result<()> {
-        let in_use = pkgs
+    pub async fn report_in_use(
+        &mut self,
+        workload_id: String,
+        files: Vec<WorkloadPath>,
+    ) -> Result<()> {
+        let in_use = files
             .into_iter()
-            .map(|p| pb::PkgInUse {
-                id: p.id,
-                files: p
-                    .filenames
-                    .iter()
-                    .filter_map(|f| f.as_raw().to_str().map(|f| f.to_string()))
-                    .collect(),
+            .map(|f| pb::PkgInUse {
+                id: String::new(),
+                files: vec![f.as_raw().display().to_string()],
             })
             .collect();
 

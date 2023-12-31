@@ -46,6 +46,8 @@ struct Inner {
 
     pkg_tracking: Option<bool>,
 
+    machine_sbom: Option<bool>,
+
     hostname: Option<String>,
 
     host_root: Option<PathBuf>,
@@ -236,6 +238,17 @@ impl Config {
             .pkg_tracking
             .or_else(|| {
                 std::env::var("EDGEBIT_PKG_TRACKING")
+                    .ok()
+                    .map(|v| is_yes(&v))
+            })
+            .unwrap_or(true)
+    }
+
+    pub fn machine_sbom(&self) -> bool {
+        self.inner
+            .machine_sbom
+            .or_else(|| {
+                std::env::var("EDGEBIT_MACHINE_SBOM")
                     .ok()
                     .map(|v| is_yes(&v))
             })
