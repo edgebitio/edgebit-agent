@@ -1,10 +1,12 @@
 use std::ffi::{c_char, CStr};
+use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::{MapFlags, PerfBufferBuilder};
+use libbpf_rs::{Map, MapFlags, MapHandle, PerfBufferBuilder, RingBufferBuilder};
+use thiserror::Error;
 
 use log::*;
 use tokio::sync::mpsc::Sender;
@@ -30,11 +32,67 @@ pub trait FileOpenMonitor {
 
 pub type FileOpenMonitorArc = Arc<dyn FileOpenMonitor + Send + Sync>;
 
-#[derive(Clone)]
+enum CommBufferMap<'a> {
+    RingBuffer(&'a Map),
+    PerfBuffer(&'a Map),
+}
+
+enum CommBuffer<'cb> {
+    RingBuffer(libbpf_rs::RingBuffer<'cb>),
+    PerfBuffer(libbpf_rs::PerfBuffer<'cb>),
+}
+
+impl<'cb> CommBuffer<'cb> {
+    fn load<F>(map: CommBufferMap<'_>, pages: usize, cb: F) -> Result<Self>
+    where
+        F: Fn(&[u8]) + Send + Sync + 'static,
+    {
+        match map {
+            CommBufferMap::RingBuffer(rb) => {
+                let mut builder = RingBufferBuilder::new();
+                builder.add(rb, move |buf: &[u8]| {
+                    cb(buf);
+                    0i32
+                })?;
+
+                let rb = builder.build()?;
+                Ok(CommBuffer::RingBuffer(rb))
+            }
+            CommBufferMap::PerfBuffer(pb) => {
+                let pb = PerfBufferBuilder::new(pb)
+                    .pages(pages)
+                    .sample_cb(move |_cpu, buf: &[u8]| cb(buf))
+                    .lost_cb(handle_lost_events)
+                    .build()?;
+
+                Ok(CommBuffer::PerfBuffer(pb))
+            }
+        }
+    }
+
+    fn poll(&self, dur: Duration) -> Result<()> {
+        match self {
+            CommBuffer::RingBuffer(rb) => rb.poll(dur)?,
+            CommBuffer::PerfBuffer(pb) => pb.poll(dur)?,
+        }
+
+        Ok(())
+    }
+}
+
+fn handle_lost_events(cpu: i32, count: u64) {
+    warn!("Lost {count} events on CPU {cpu}");
+}
+
+#[derive(Error, Debug)]
+#[error(transparent)]
+pub struct LoadError(#[from] libbpf_rs::Error);
+
 struct BpfProbes {
     // ProbesSkel contains OpenObject which has a *mut,
     // making it not possible to use with .await
-    skel: Arc<Mutex<probes::ProbesSkel<'static>>>,
+    skel: probes::ProbesSkel<'static>,
+    use_ring_buf: bool,
 }
 
 impl BpfProbes {
@@ -42,54 +100,103 @@ impl BpfProbes {
         // first thing is to bump the ulimit for locked memory for older kernels
         bump_rlimit()?;
 
+        let use_ring_buf = supports_ring_buffer();
+        info!("Using ring buffer: {use_ring_buf}");
+
         let mut with_optional = true;
 
         loop {
-            let skel_builder = probes::ProbesSkelBuilder::default();
-            let mut open_skel = skel_builder
-                .open()
-                .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
-
-            open_skel
-                .progs_mut()
-                .enter_openat2()
-                .set_autoload(with_optional)?;
-
-            open_skel
-                .progs_mut()
-                .exit_openat2()
-                .set_autoload(with_optional)?;
-
-            let mut skel = match open_skel.load() {
-                Ok(skel) => skel,
+            match Self::load_internal(use_ring_buf, with_optional) {
+                Ok(skel) => return Ok(skel),
                 Err(err) => {
-                    if with_optional {
-                        info!(
-                            "Loading of BPF probes failed, retrying with optional probes disabled"
-                        );
-                        // if it failed on first try, disable optional programs and try again
-                        with_optional = false;
-                        continue;
+                    if err.is::<LoadError>() {
+                        if with_optional {
+                            info!(
+                                "Loading of BPF probes failed, retrying with optional probes disabled"
+                            );
+                            with_optional = false;
+                        } else {
+                            return Err(anyhow!("ProbesSkelBuilder::load(): {err}"));
+                        }
                     } else {
-                        return Err(anyhow!("ProbesSkelBuilder::load(): {err}"));
+                        return Err(err);
                     }
                 }
-            };
-
-            if let Err(err) = skel.attach() {
-                if with_optional {
-                    info!("Attaching of BPF probes failed, retrying with optional probes disabled");
-                    // if it failed on first try, disable optional programs and try again
-                    with_optional = false;
-                    continue;
-                } else {
-                    return Err(anyhow!("ProbesSkelBuilder::attach(): {err}"));
-                }
             }
+        }
+    }
 
-            return Ok(Self {
-                skel: Arc::new(Mutex::new(skel)),
-            });
+    fn load_internal(use_ring_buf: bool, with_optional_probes: bool) -> Result<Self> {
+        let skel_builder = probes::ProbesSkelBuilder::default();
+
+        let mut open_skel = skel_builder
+            .open()
+            .map_err(|err| anyhow!("ProbesSkelBuilder::open(): {err}"))?;
+
+        open_skel
+            .maps_mut()
+            .rb_open_events()
+            .set_autocreate(use_ring_buf)?;
+
+        open_skel
+            .maps_mut()
+            .pb_open_events()
+            .set_autocreate(!use_ring_buf)?;
+
+        open_skel
+            .maps_mut()
+            .rb_zombie_events()
+            .set_autocreate(use_ring_buf)?;
+
+        open_skel
+            .maps_mut()
+            .pb_zombie_events()
+            .set_autocreate(!use_ring_buf)?;
+
+        open_skel
+            .progs_mut()
+            .enter_openat2()
+            .set_autoload(with_optional_probes)?;
+
+        open_skel
+            .progs_mut()
+            .exit_openat2()
+            .set_autoload(with_optional_probes)?;
+
+        let mut skel = open_skel.load().map_err(LoadError)?;
+
+        skel.attach().map_err(LoadError)?;
+
+        Ok(Self { skel, use_ring_buf })
+    }
+
+    fn open_events<'cb, F>(&self, cb: F) -> Result<CommBuffer<'cb>>
+    where
+        F: Fn(&[u8]) + Send + Sync + 'static,
+    {
+        let maps = self.skel.maps();
+
+        if self.use_ring_buf {
+            let map = CommBufferMap::RingBuffer(maps.rb_open_events());
+            CommBuffer::load(map, 0, cb)
+        } else {
+            let map = CommBufferMap::PerfBuffer(maps.pb_open_events());
+            CommBuffer::load(map, OPEN_EVENTS_BUF_SIZE, cb)
+        }
+    }
+
+    fn zombie_events<'cb, F>(&self, cb: F) -> Result<CommBuffer<'cb>>
+    where
+        F: Fn(&[u8]) + Send + Sync + 'static,
+    {
+        let maps = self.skel.maps();
+
+        if self.use_ring_buf {
+            let map = CommBufferMap::RingBuffer(maps.rb_zombie_events());
+            CommBuffer::load(map, 0, cb)
+        } else {
+            let map = CommBufferMap::PerfBuffer(maps.pb_zombie_events());
+            CommBuffer::load(map, ZOMBIE_EVENTS_BUF_SIZE, cb)
         }
     }
 
@@ -97,8 +204,6 @@ impl BpfProbes {
         let key = pid.to_ne_bytes();
         let val = self
             .skel
-            .lock()
-            .unwrap()
             .maps()
             .pid_to_info()
             .lookup(&key, MapFlags::ANY)
@@ -119,10 +224,8 @@ impl BpfProbes {
         })
     }
 
-    fn remove_pid(&self, pid: &[u8]) -> Result<()> {
+    fn remove_pid(&mut self, pid: &[u8]) -> Result<()> {
         self.skel
-            .lock()
-            .unwrap()
             .maps_mut()
             .pid_to_info()
             .delete(pid)
@@ -130,70 +233,6 @@ impl BpfProbes {
 
         Ok(())
     }
-
-    fn watch_zombies<F>(&self, callback: F) -> JoinHandle<Result<()>>
-    where
-        F: Send + Sync + Fn(&[u8]) + 'static,
-    {
-        let cb = Box::new(move |_cpu, buf: &[u8]| callback(buf));
-
-        let skel = self.skel.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let zombies = {
-                let skel = skel.lock().unwrap();
-                let maps = skel.maps();
-
-                match PerfBufferBuilder::new(maps.zombie_events())
-                    .pages(ZOMBIE_EVENTS_BUF_SIZE)
-                    .sample_cb(cb)
-                    .lost_cb(handle_lost_events)
-                    .build()
-                {
-                    Ok(zombies) => zombies,
-                    Err(err) => return Err(anyhow::Error::from(err)),
-                }
-            };
-
-            loop {
-                _ = zombies.poll(Duration::from_millis(100));
-            }
-        })
-    }
-
-    fn watch_opens<F>(&self, callback: F) -> JoinHandle<Result<()>>
-    where
-        F: Send + Sync + Fn(&[u8]) + 'static,
-    {
-        let cb = Box::new(move |_cpu, buf: &[u8]| callback(buf));
-
-        let skel = self.skel.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let opens = {
-                let skel = skel.lock().unwrap();
-                let maps = skel.maps();
-
-                match PerfBufferBuilder::new(maps.open_events())
-                    .pages(OPEN_EVENTS_BUF_SIZE)
-                    .sample_cb(cb)
-                    .lost_cb(handle_lost_events)
-                    .build()
-                {
-                    Ok(opens) => opens,
-                    Err(err) => return Err(anyhow::Error::from(err)),
-                }
-            };
-
-            loop {
-                _ = opens.poll(Duration::from_millis(100));
-            }
-        })
-    }
-}
-
-fn handle_lost_events(cpu: i32, count: u64) {
-    warn!("Lost {count} events on CPU {cpu}");
 }
 
 #[repr(C)]
@@ -239,38 +278,22 @@ impl TryFrom<&[u8]> for ProcessInfo {
 pub struct OpenMonitor {
     fan: Arc<Fanotify>,
     fan_task: JoinHandle<()>,
-    _probes: BpfProbes,
-    zombie_task: JoinHandle<Result<()>>,
-    opens_task: JoinHandle<Result<()>>,
+    _probes: Arc<Mutex<BpfProbes>>,
+    zombie_task: JoinHandle<()>,
+    opens_task: JoinHandle<()>,
 }
 
 impl OpenMonitor {
     pub fn start(ch: Sender<OpenEvent>) -> Result<Self> {
         let fan = Arc::new(Fanotify::new()?);
-        let probes = BpfProbes::load()?;
+        let probes = Arc::new(Mutex::new(BpfProbes::load()?));
 
         let fan_task =
             tokio::task::spawn(monitor_fanotify(fan.clone(), probes.clone(), ch.clone()));
 
-        let opens_task = monitor_bpf_open_events(probes.clone(), ch);
+        let opens_task = monitor_bpf_open_events(probes.clone(), ch)?;
 
-        // Watch for processes to exit and schedule their process info to be cleaned up
-        // a few seconds after
-        let zombie_task = {
-            let probes2 = probes.clone();
-
-            probes.watch_zombies(move |pid| {
-                let pid = pid.to_vec();
-                let probes = probes2.clone();
-
-                tokio::task::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    if let Err(err) = probes.remove_pid(&pid) {
-                        error!("Failed to remove process info from BPF map: {err}");
-                    }
-                });
-            })
-        };
+        let zombie_task = monitor_zombies(probes.clone())?;
 
         Ok(Self {
             fan,
@@ -305,7 +328,11 @@ impl FileOpenMonitor for OpenMonitor {
     }
 }
 
-async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<OpenEvent>) {
+async fn monitor_fanotify(
+    fan: Arc<Fanotify>,
+    probes: Arc<Mutex<BpfProbes>>,
+    ch: Sender<OpenEvent>,
+) {
     loop {
         let events = match fan.next().await {
             Ok(events) => events,
@@ -324,7 +351,7 @@ async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<Open
                 }
             };
 
-            let cgroup_name = match probes.lookup_cgroup(e.pid as u32) {
+            let cgroup_name = match probes.lock().unwrap().lookup_cgroup(e.pid as u32) {
                 Ok(cgroup) => cgroup,
                 Err(err) => {
                     error!("lookup_cgroup: {err}");
@@ -344,35 +371,68 @@ async fn monitor_fanotify(fan: Arc<Fanotify>, probes: BpfProbes, ch: Sender<Open
     }
 }
 
-fn monitor_bpf_open_events(probes: BpfProbes, ch: Sender<OpenEvent>) -> JoinHandle<Result<()>> {
-    let probes2 = probes.clone();
+fn monitor_bpf_open_events(
+    probes_arc: Arc<Mutex<BpfProbes>>,
+    ch: Sender<OpenEvent>,
+) -> Result<JoinHandle<()>> {
+    let events = {
+        let probes = probes_arc.lock().unwrap();
+        let probes_arc = probes_arc.clone();
 
-    probes.watch_opens(move |buf| {
-        let evt = buf.as_ptr() as *const EvtOpen;
-        let fname = unsafe { CStr::from_ptr(&((*evt).filename) as *const c_char) };
-        let pid = unsafe { u32::from_ne_bytes((*evt).pid) };
+        probes.open_events(move |buf| {
+            let evt = buf.as_ptr() as *const EvtOpen;
+            let fname = unsafe { CStr::from_ptr(&((*evt).filename) as *const c_char) };
+            let pid = unsafe { u32::from_ne_bytes((*evt).pid) };
 
-        let filename = WorkloadPath::from_cstr(fname);
+            let filename = WorkloadPath::from_cstr(fname);
 
-        let cgroup_name = match probes2.lookup_cgroup(pid) {
-            Ok(cgroup) => cgroup,
-            Err(err) => {
-                error!("lookup_cgroup: {err}");
-                None
+            let cgroup_name = match probes_arc.lock().unwrap().lookup_cgroup(pid) {
+                Ok(cgroup) => cgroup,
+                Err(err) => {
+                    error!("lookup_cgroup: {err}");
+                    None
+                }
+            };
+
+            trace!("bpf: {} / {:?}", filename.display(), cgroup_name);
+
+            let open = OpenEvent {
+                cgroup_name,
+                filename,
+            };
+
+            if let Err(err) = ch.blocking_send(open) {
+                error!("Error sending OpenEvent on a channel: {err}");
             }
-        };
+        })?
+    };
 
-        trace!("bpf: {} / {:?}", filename.display(), cgroup_name);
+    Ok(tokio::task::spawn_blocking(move || loop {
+        _ = events.poll(Duration::from_millis(100));
+    }))
+}
 
-        let open = OpenEvent {
-            cgroup_name,
-            filename,
-        };
+fn monitor_zombies(probes_arc: Arc<Mutex<BpfProbes>>) -> Result<JoinHandle<()>> {
+    let events = {
+        let probes = probes_arc.lock().unwrap();
+        let probes_arc = probes_arc.clone();
 
-        if let Err(err) = ch.blocking_send(open) {
-            error!("Error sending OpenEvent on a channel: {err}");
-        }
-    })
+        probes.zombie_events(move |buf| {
+            let pid = buf.to_vec();
+            let probes_arc = probes_arc.clone();
+
+            tokio::task::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                if let Err(err) = probes_arc.lock().unwrap().remove_pid(&pid) {
+                    error!("Failed to remove process info from BPF map: {err}");
+                }
+            });
+        })?
+    };
+
+    Ok(tokio::task::spawn_blocking(move || loop {
+        _ = events.poll(Duration::from_millis(100));
+    }))
 }
 
 // matches evt_open in probes.bpf.c
@@ -397,6 +457,25 @@ fn bump_rlimit() -> Result<()> {
     .map_err(|err| anyhow!("failed to raise lock memory rlimit: {err}"))?;
 
     Ok(())
+}
+
+fn supports_ring_buffer() -> bool {
+    use libbpf_rs::libbpf_sys::{bpf_map_create_opts, size_t};
+
+    let opts = bpf_map_create_opts {
+        sz: size_of::<bpf_map_create_opts>() as size_t,
+        ..Default::default()
+    };
+
+    MapHandle::create(
+        libbpf_rs::MapType::RingBuf,
+        Some("test"),
+        0u32,
+        0u32,
+        4096u32,
+        &opts,
+    )
+    .is_ok()
 }
 
 pub struct NullOpenMonitor;

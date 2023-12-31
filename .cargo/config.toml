@@ -1,2 +1,5 @@
 [build]
 rustflags = [ "-L/usr/local/musl/lib" ]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = [ "-L/usr/local/musl/lib", "-L/usr/lib/gcc/aarch64-linux-gnu/13", "-lgcc" ]

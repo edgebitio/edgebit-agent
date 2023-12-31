@@ -22,7 +22,7 @@ prost-types = "0.11"
 tower = "0.4"
 tonic = { version = "0.8", features = ["transport", "tls", "tls-webpki-roots"] }
 gethostname = "0.4"
-libbpf-rs = { version = "0.21.2", features = ["static"] }
+libbpf-rs = { git = "https://github.com/libbpf/libbpf-rs.git", branch = "master", features = ["static" ] }
 futures = "0.3"
 async-stream = "0.3"
 temp-file = "0.1"
@@ -45,10 +45,11 @@ lru = "0.10.0"
 aws-config = "0.55"
 hyper = { version = "0.14", features = ["client"] }
 rand = "0.8"
+thiserror = "1.0.52"
 
 [build-dependencies]
 tonic-build = "0.8"
-libbpf-cargo = "0.21.2"
+libbpf-cargo = "0.22.0"
 
 [dev-dependencies]
 assert2 = "0.3"

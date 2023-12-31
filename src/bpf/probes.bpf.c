@@ -99,11 +99,13 @@ BPF_HASH(open_inflight, pid_t, struct open_inflight_entry, 1024);
 // the PID to cgroup
 BPF_HASH(pid_to_info, pid_t, struct process_info, 1024);
 
-// Open file events
-BPF_PERF_EVENT_ARRAY(open_events);
+// Open file events (either ring buffer or perf event array will be used, depending on kernel version)
+BPF_RING_BUF(rb_open_events, 256*1024);
+BPF_PERF_EVENT_ARRAY(pb_open_events);
 
-// Process exit events
-BPF_PERF_EVENT_ARRAY(zombie_events);
+// Process exit events (either ring buffer or perf event array will be used, depending on kernel version)
+BPF_RING_BUF(rb_zombie_events, 4*1024);
+BPF_PERF_EVENT_ARRAY(pb_zombie_events);
 
 static inline bool is_abs(const char *filename) {
     return filename && *filename == '/';
@@ -180,8 +182,14 @@ static void emit_open_event(void *ctx, pid_t tgid, const char *filename, bool us
     if (!is_abs(evt.filename))
         return;
 
-    if (bpf_perf_event_output(ctx, &open_events, BPF_F_CURRENT_CPU, &evt, sizeof(evt)) < 0) {
-        BPF_PRINTK("error sending evt_open");
+    if (bpf_core_type_exists(struct bpf_ringbuf)) {
+        if (bpf_ringbuf_output(&rb_open_events, &evt, sizeof(evt), 0) < 0) {
+            BPF_PRINTK("error sending evt_open");
+        }
+    } else {
+        if (bpf_perf_event_output(ctx, &pb_open_events, BPF_F_CURRENT_CPU, &evt, sizeof(evt)) < 0) {
+            BPF_PRINTK("error sending evt_open");
+        }
     }
 }
 
@@ -338,8 +346,14 @@ int sched_process_exit(struct trace_event_raw_sched_process_template *tp) {
 
     // Notify the userspace that a process exited so it has a chance to clean up
     // the pid_to_info map.
-    if (bpf_perf_event_output(tp, &zombie_events, BPF_F_CURRENT_CPU, &pid, sizeof(pid)) < 0) {
-        BPF_PRINTK("error sending zombie event");
+    if (bpf_core_type_exists(struct bpf_ringbuf)) {
+        if (bpf_ringbuf_output(&rb_zombie_events, &pid, sizeof(pid), 0) < 0) {
+            BPF_PRINTK("error sending zombie event");
+        }
+    } else {
+        if (bpf_perf_event_output(tp, &pb_zombie_events, BPF_F_CURRENT_CPU, &pid, sizeof(pid)) < 0) {
+            BPF_PRINTK("error sending zombie event");
+        }
     }
 
     return 0;
@@ -354,3 +368,4 @@ int BPF_KPROBE(fsnotify) {
 
     return 0;
 }
+

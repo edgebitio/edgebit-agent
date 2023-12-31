@@ -1,5 +1,5 @@
 # Adapted from nasqueron/rust-musl-builder
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 # The Rust toolchain to use when building our image.  Set by `hooks/build`.
 ARG TOOLCHAIN=stable
