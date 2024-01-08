@@ -955,10 +955,10 @@ dependencies = [
  "json",
  "lazy_static",
  "libbpf-cargo",
- "libbpf-rs",
+ "libbpf-rs 0.22.0 (git+https://github.com/libbpf/libbpf-rs.git?branch=master)",
  "log",
  "lru",
- "nix",
+ "nix 0.26.4",
  "oci-spec",
  "podman-api",
  "pretty_env_logger",
@@ -972,6 +972,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "temp-file",
+ "thiserror",
  "tokio",
  "tokio-pipe",
  "tonic",
@@ -1550,14 +1551,14 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libbpf-cargo"
-version = "0.21.2"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81d351d68854bfb21aeb9afe715e1da8bc2ee45d645fb9b69c6387593635790c"
+checksum = "e952c4449995609ffff93094d15612736472cb12c5aa1f05bdebae3ffc8a6363"
 dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
- "libbpf-rs",
+ "libbpf-rs 0.22.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libbpf-sys",
  "memmap2",
  "num_enum",
@@ -1568,20 +1569,35 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
 ]
 
 [[package]]
 name = "libbpf-rs"
-version = "0.21.2"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d70f003d6e48e60a7ed55d4fb5b2419b91a962c903fa0b00e8db95a3b6651abc"
+checksum = "8af3184e3e4642c2065c44949ba2897be063909e9a5b2aad840a6935d727fe5e"
 dependencies = [
- "bitflags 1.3.2",
+ "bitflags 2.4.1",
  "lazy_static",
  "libbpf-sys",
  "libc",
- "nix",
+ "nix 0.27.1",
+ "num_enum",
+ "strum_macros",
+ "thiserror",
+ "vsprintf",
+]
+
+[[package]]
+name = "libbpf-rs"
+version = "0.22.0"
+source = "git+https://github.com/libbpf/libbpf-rs.git?branch=master#a28a805b59a1283bd713f198c10de083b4d48670"
+dependencies = [
+ "bitflags 2.4.1",
+ "lazy_static",
+ "libbpf-sys",
+ "libc",
+ "nix 0.27.1",
  "num_enum",
  "strum_macros",
  "thiserror",
@@ -1595,7 +1611,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75adb4021282a72ca63ebbc0e4247750ad74ede68ff062d247691072d709ad8b"
 dependencies = [
  "cc",
- "nix",
+ "nix 0.26.4",
  "num_cpus",
  "pkg-config",
 ]
@@ -1658,6 +1674,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memoffset"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a634b1c61a95585bd15607c6ab0c4e5b226e695ff2800ba0cdccddf208c406c"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1698,8 +1723,20 @@ dependencies = [
  "bitflags 1.3.2",
  "cfg-if",
  "libc",
- "memoffset",
+ "memoffset 0.7.1",
  "pin-utils",
+]
+
+[[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.4.1",
+ "cfg-if",
+ "libc",
+ "memoffset 0.9.0",
 ]
 
 [[package]]
@@ -2547,18 +2584,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.50"
+version = "1.0.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a7210f5c9a7156bb50aa36aed4c95afb51df0df00713949448cf9e97d382d2"
+checksum = "83a48fd946b02c0a526b2e9481c8e2a17755e47039164a86c4070446e3a4614d"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.50"
+version = "1.0.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "266b2e40bc00e5a6c09c3584011e08b06f123c00362c92b975ba9843aaaa14b8"
+checksum = "e7fbe9b594d6568a6a1443250a7e67d80b74e1e96f6d1715e1e21cc1888291d3"
 dependencies = [
  "proc-macro2",
  "quote",
