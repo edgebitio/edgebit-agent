@@ -7,7 +7,6 @@ pub mod jitter;
 pub mod label;
 pub mod open_monitor;
 pub mod platform;
-pub mod registry;
 pub mod sbom;
 pub mod scoped_path;
 pub mod version;
@@ -102,7 +101,11 @@ async fn run(args: &CliArgs) -> Result<()> {
     let mut client =
         platform::Client::connect(url.try_into()?, token, config.hostname(), machine_id).await?;
 
-    let sbom = load_sbom(args, config.clone(), &mut client).await?;
+    let host_image_id = if config.machine_sbom() {
+        load_sbom(args, config.clone(), &mut client).await?.id()
+    } else {
+        String::new()
+    };
 
     client.reset_workloads().await?;
 
@@ -129,7 +132,7 @@ async fn run(args: &CliArgs) -> Result<()> {
 
     let (events_tx, events_rx) = tokio::sync::mpsc::channel::<Event>(1000);
     let host_wrkld = HostWorkload::new(
-        sbom,
+        host_image_id,
         config.clone(),
         open_mon.clone(),
         cloud_meta.host_labels(),
@@ -244,9 +247,13 @@ fn to_upsert_workload_req(
         start_time: Some(SystemTime::now().into()),
         end_time: Some(TIMESTAMP_INFINITY),
         image_id: workload.image_id.clone(),
-        image: Some(pb::Image {
-            kind: Some(pb::image::Kind::Generic(pb::GenericImage {})),
-        }),
+        image: if workload.image_id.is_empty() {
+            None
+        } else {
+            Some(pb::Image {
+                kind: Some(pb::image::Kind::Generic(pb::GenericImage {})),
+            })
+        },
         machine_id: String::new(),
     }
 }
