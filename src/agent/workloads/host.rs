@@ -138,7 +138,7 @@ fn load_baseos_id() -> String {
     let id = uuid_string();
 
     if let Err(err) = std::fs::write(BASEOS_ID_PATH, &id) {
-        error!("Failed to save BaseOS workload ID to {BASEOS_ID_PATH}: {err}");
+        info!("BaseOS workload ID was not saved to {BASEOS_ID_PATH}: {err}");
     }
 
     id
