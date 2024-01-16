@@ -99,3 +99,23 @@ kubectl apply -f config.yaml
 ```
 kubectl apply -f daemonset.yaml
 ```
+
+# Configuration
+The agent supports the following environment variables and configuration file keys:
+
+| Environment Variable         | Config file key      | Required | Description                                   | Default value
+| ---------------------------- | -------------------- | -------- |---------------------------------------------- | -------------
+| `EDGEBIT_ID`                 | `edgebit_id`         | Yes      | The EdgeBit node agent deployment token       |
+| `EDGEBIT_URL`                | `edgebit_url`        | Yes      | Org specific EdgeBit URL                      |
+| `EDGEBIT_SYFT_CONFIG`        | `syft_config`        | Yes      | Path to the Syft config file                  |
+| `EDGEBIT_SYFT_PATH`          | `syft_path`          | Yes      | Path to the Syft executable                   |
+| `EDGEBIT_LOG_LEVEL`          | `log_level`          | No       | Log level: trace, debug, info, warn, error    | `info`
+| `EDGEBIT_HOST_INCLUDES`      | `host_includes`      | No       | Included host paths used for package-in-use tracking | `/bin, /lib, /lib32, /lib64, /libx32, /opt, /sbin, /usr`
+| `EDGEBIT_HOST_EXCLUDES`      | `host_excludes`      | No       | Excluded host paths (overides includes)       |
+| `EDGEBIT_CONTAINER_EXCLUDES` | `container_excludes` | No       | Excluded container paths used for package-in-use tracking | All volumes mounted into the container
+| `EDGEBIT_DOCKER_HOST`        | `docker_host`        | No       | Docker socket address                         | `unix:///run/docker.sock`
+| `EDGEBIT_CONTAINERD_HOST`    | `containerd_host`    | No       | Containerd socket address                     |
+| `EDGEBIT_CONTAINERD_ROOTS`   | `containerd_roots`   | No       | Path to container root filesystems            | `/run/containerd/io.containerd.runtime.v2.task/k8s.io/`
+| `EDGEBIT_PKG_TRACKING`       | `pkg_tracking`       | No       | Enable/disable package-in-use tracking        | yes
+| `EDGEBIT_MACHINE_SBOM`       | `machine_sbom`       | No       | Enable/disable machine (host) SBOM generation | yes
+| `EDGEBIT_LABELS`             | `labels`             | No       | Key/value labels to attach to the workloads. Environment variable should be in `key1=val1;key2=val2` format. The config file value should be a JSON object. |
