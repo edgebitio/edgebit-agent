@@ -106,7 +106,7 @@ jobs:
         if: ${{ matrix.arch == 'amd64' }}
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ steps.build.outputs.imageid }}
+          image: ${{ steps.build-agent.outputs.imageid }}
           output-file: /tmp/sbom.spdx.json
           config: .github/edgebit/build-syft.yaml
 
@@ -117,7 +117,7 @@ jobs:
           edgebit-url: https://edgebit.edgebit.io
           token: ${{ secrets.EDGEBIT_TOKEN }}
           sbom-file: /tmp/sbom.spdx.json
-          image-id: ${{ steps.build.outputs.imageid }}
+          image-id: ${{ steps.build-agent.outputs.imageid }}
           image-tag: ${{ steps.meta.outputs.tags }}
           component: edgebitio-edgebit-agent
           tags: v${{ steps.meta.outputs.version }}
