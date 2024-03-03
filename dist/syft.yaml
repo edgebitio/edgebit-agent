@@ -1,30 +1,4 @@
-output: json
-
 check-for-app-update: false
-
-catalogers:
-  - alpmdb
-  - apkdb
-  - dpkgdb
-  - dpkg-db
-  - portage
-  - rpmdb
-  - rpm-db
-  - ruby-gemfile
-  - python-package
-  - php-composer-lock
-  - javascript-lock
-  - java
-  - graalvm-native-image
-  - go-module-binary
-  - go-mod-file
-  - rust-cargo-lock
-  - dartlang-lock
-  - dotnet-deps
-  - cocoapods
-  - conan
-  - hackage
-  - sbom
 
 exclude:
   - ./dev

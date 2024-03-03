@@ -43,8 +43,9 @@ async fn generate_no_chroot(syft_path: &Path, syft_config: &Path) -> Result<Temp
     let out_path = sbom.path();
 
     let child = Command::new(syft_path)
-        .arg("--file")
-        .arg(out_path)
+        .arg("scan")
+        .arg("--output")
+        .arg(format!("spdx-json={}", out_path.display()))
         .arg("--config")
         .arg(syft_config)
         .arg("/")
@@ -77,6 +78,7 @@ async fn generate_with_chroot(
         .stdin(std::fs::File::open(syft_config)?)
         .stdout(sbom_file)
         .arg("syft".into())
+        .arg("scan".into())
         .arg("--config".into())
         .arg("/tmp/syft.yaml".into())
         .arg("/".into());
