@@ -268,27 +268,8 @@ impl K8sContainerdTracker {
 #[derive(Debug)]
 enum ContainerdEvent {
     Unknown,
-    ContainerCreate(ContainerCreate),
-    ContainerDelete(ContainerDelete),
-    ContainerUpdate(ContainerUpdate),
-    ContentDelete(ContentDelete),
-    NamespaceCreate(NamespaceCreate),
-    NamespaceDelete(NamespaceDelete),
-    NamespaceUpdate(NamespaceUpdate),
-    SnapshotCommit(SnapshotCommit),
-    SnapshotPrepare(SnapshotPrepare),
-    SnapshotRemove(SnapshotRemove),
-    TaskCheckpointed(TaskCheckpointed),
     TaskCreate(TaskCreate),
     TaskDelete(TaskDelete),
-    TaskExecAdded(TaskExecAdded),
-    TaskExecStarted(TaskExecStarted),
-    TaskExit(TaskExit),
-    TaskIo(TaskIo),
-    TaskOom(TaskOom),
-    TaskPaused(TaskPaused),
-    TaskResumed(TaskResumed),
-    TaskStart(TaskStart),
 }
 
 impl TryFrom<Any> for ContainerdEvent {
@@ -298,68 +279,11 @@ impl TryFrom<Any> for ContainerdEvent {
         use prost::Message;
 
         let ev = match v.type_url.as_ref() {
-            "containerd.events.ContainerCreate" => {
-                ContainerdEvent::ContainerCreate(ContainerCreate::decode(v.value.as_ref())?)
-            }
-            "containerd.events.ContainerDelete" => {
-                ContainerdEvent::ContainerDelete(ContainerDelete::decode(v.value.as_ref())?)
-            }
-            "containerd.events.ContainerUpdate" => {
-                ContainerdEvent::ContainerUpdate(ContainerUpdate::decode(v.value.as_ref())?)
-            }
-            "containerd.events.ContentDelete" => {
-                ContainerdEvent::ContentDelete(ContentDelete::decode(v.value.as_ref())?)
-            }
-            "containerd.events.NamespaceCreate" => {
-                ContainerdEvent::NamespaceCreate(NamespaceCreate::decode(v.value.as_ref())?)
-            }
-            "containerd.events.NamespaceDelete" => {
-                ContainerdEvent::NamespaceDelete(NamespaceDelete::decode(v.value.as_ref())?)
-            }
-            "containerd.events.NamespaceUpdate" => {
-                ContainerdEvent::NamespaceUpdate(NamespaceUpdate::decode(v.value.as_ref())?)
-            }
-            "containerd.events.SnapshotCommit" => {
-                ContainerdEvent::SnapshotCommit(SnapshotCommit::decode(v.value.as_ref())?)
-            }
-            "containerd.events.SnapshotPrepare" => {
-                ContainerdEvent::SnapshotPrepare(SnapshotPrepare::decode(v.value.as_ref())?)
-            }
-            "containerd.events.SnapshotRemove" => {
-                ContainerdEvent::SnapshotRemove(SnapshotRemove::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskCheckpointed" => {
-                ContainerdEvent::TaskCheckpointed(TaskCheckpointed::decode(v.value.as_ref())?)
-            }
             "containerd.events.TaskCreate" => {
                 ContainerdEvent::TaskCreate(TaskCreate::decode(v.value.as_ref())?)
             }
             "containerd.events.TaskDelete" => {
                 ContainerdEvent::TaskDelete(TaskDelete::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskExecAdded" => {
-                ContainerdEvent::TaskExecAdded(TaskExecAdded::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskExecStarted" => {
-                ContainerdEvent::TaskExecStarted(TaskExecStarted::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskExit" => {
-                ContainerdEvent::TaskExit(TaskExit::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskIo" => {
-                ContainerdEvent::TaskIo(TaskIo::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskOom" => {
-                ContainerdEvent::TaskOom(TaskOom::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskPaused" => {
-                ContainerdEvent::TaskPaused(TaskPaused::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskResumed" => {
-                ContainerdEvent::TaskResumed(TaskResumed::decode(v.value.as_ref())?)
-            }
-            "containerd.events.TaskStart" => {
-                ContainerdEvent::TaskStart(TaskStart::decode(v.value.as_ref())?)
             }
             _ => ContainerdEvent::Unknown,
         };
