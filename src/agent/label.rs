@@ -1,5 +1,6 @@
 // Global namespace for most generic/common labels
 pub const LABEL_INSTANCE_ID: &str = "instance-id";
+pub const LABEL_INSTANCE_TAG: &str = "instance-tag";
 pub const LABEL_IMAGE_ID: &str = "image-id";
 pub const LABEL_IMAGE_TAG: &str = "image-tag";
 

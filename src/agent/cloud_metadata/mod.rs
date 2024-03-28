@@ -1,3 +1,4 @@
+mod azure;
 mod ec2;
 mod gce;
 
@@ -47,6 +48,15 @@ impl CloudMetadata {
                 }
             }
             Err(err) => debug!("gce load metadata {err}"),
+        }
+
+        match azure::AzureMetadata::load().await {
+            Ok(p) => {
+                return Self {
+                    provider: Arc::new(p),
+                }
+            }
+            Err(err) => debug!("azure load metadata {err}"),
         }
 
         Self {
