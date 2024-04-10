@@ -70,7 +70,7 @@ jobs:
           images: |
             public.ecr.aws/edgebit/edgebit-agent
           tags: |
-            type=semver,pattern={{major}}.{{minor}}-${{ matrix.arch }}
+            type=semver,pattern={{version}}-${{ matrix.arch }}
           flavor: |
             latest=false
 
@@ -146,8 +146,7 @@ jobs:
           images: |
             public.ecr.aws/edgebit/edgebit-agent
           tags: |
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}.{{minor}}.{{patch}}
+            type=semver,pattern={{version}}
 
       - name: Combine into multi-arch
         shell: bash
