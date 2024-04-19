@@ -2,7 +2,7 @@
 
 arch=$(uname -m)
 
-: "${VERSION:=0.5.0}"
+: "${VERSION:=0.6.0}"
 : "${TARBALL_URL:=https://github.com/edgebitio/edgebit-agent/releases/download/v${VERSION}/edgebit-agent-${VERSION}.${arch}.tar.gz}"
 : "${PREFIX:=/opt}"
 : "${EDGEBIT_CONFIG:=/etc/edgebit/config.yaml}"
