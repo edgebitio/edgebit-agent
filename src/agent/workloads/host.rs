@@ -156,7 +156,7 @@ fn get_os_release(
     host_root: &RootFsPath,
 ) -> rs_release::Result<HashMap<Cow<'static, str>, String>> {
     for file in OS_RELEASE_PATHS {
-        let file = host_root.join(&PathBuf::from(file));
+        let file = host_root.join(PathBuf::from(file));
         if let Ok(release) = rs_release::parse_os_release(file.as_raw()) {
             return Ok(release);
         }
