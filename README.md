@@ -18,7 +18,7 @@ git submodule update --init
 2. Build the builder container:
 ```
 cd build
-docker build -t agent-builder .
+docker buildx build -t agent-builder .
 ```
 
 3. Alias the docker run command to make it easier to reuse. The `cargo-git` and `cargo-registry` volumes are there to preserve the cache between builds.
@@ -53,7 +53,7 @@ git submodule update --init
 2. Build the builder container:
 ```
 cd build
-docker build -t agent-builder .
+docker buildx build -t agent-builder .
 ```
 
 3. Build the Docker image:
