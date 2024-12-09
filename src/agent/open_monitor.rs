@@ -42,7 +42,7 @@ enum CommBuffer<'cb> {
     PerfBuffer(libbpf_rs::PerfBuffer<'cb>),
 }
 
-impl<'cb> CommBuffer<'cb> {
+impl CommBuffer<'_> {
     fn load<F>(map: CommBufferMap<'_>, pages: usize, cb: F) -> Result<Self>
     where
         F: Fn(&[u8]) + Send + Sync + 'static,
