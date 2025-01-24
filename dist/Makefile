@@ -1,6 +1,6 @@
 export VERSION = $(shell cargo read-manifest | jq -r .version)
 DEST = output/
-SYFT_RELEASE = 1.18.1
+SYFT_RELEASE = 1.19.0
 export ARCH = $(shell uname -m)
 export GOARCH = $(shell uname -m | sed -e "s/x86_64/amd64/" -e "s/aarch64/arm64/")
 
